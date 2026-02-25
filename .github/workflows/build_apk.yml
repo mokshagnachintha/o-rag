@@ -60,13 +60,6 @@ jobs:
           key: buildozer-project-${{ runner.os }}-${{ hashFiles('buildozer.spec','requirements.txt') }}
           restore-keys: buildozer-project-${{ runner.os }}-
 
-      # Cache the GGUF model so it isn't re-downloaded on every build
-      - name: Cache GGUF model
-        uses: actions/cache@v4
-        with:
-          path: "*.gguf"
-          key: gguf-model-Q5_K_M
-
       # ── 6. Download llama-server ARM64 binary ────────────────────── #
       - name: Download llama-server ARM64 Android binary
         run: |
@@ -118,32 +111,11 @@ jobs:
                   print("WARNING: llama-server binary not found in release zip")
           EOF
 
-      # ── 7. Download the GGUF model (bundled into the APK) ────────── #
-      - name: Download GGUF model
-        run: |
-          pip install huggingface-hub
-          python - <<'EOF'
-          from huggingface_hub import hf_hub_download
-          import os, shutil
-          filename = "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q5_K_M.gguf"
-          dest = os.path.join(os.getcwd(), filename)
-          if os.path.isfile(dest):
-              print(f"Already exists: {dest}")
-          else:
-              print("Downloading GGUF model (~851 MB) from Hugging Face...")
-              path = hf_hub_download(
-                  repo_id="mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-                  filename=filename,
-                  local_dir=".",
-                  local_dir_use_symlinks=False,
-              )
-              if os.path.abspath(path) != os.path.abspath(dest):
-                  shutil.copy2(path, dest)
-              print(f"Downloaded: {dest} ({os.path.getsize(dest)/1_048_576:.0f} MB)")
-          EOF
-
       # ── 8. Build APK ─────────────────────────────────────────────── #
       - name: Build Android debug APK
+        env:
+          # Give the Gradle daemon enough heap for asset processing
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m"
         run: |
           set -o pipefail
           # Confirm Java version
