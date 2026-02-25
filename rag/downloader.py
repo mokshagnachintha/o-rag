@@ -64,8 +64,8 @@ GEMMA_MODELS: list[dict] = [
 #  Destination directory (same as llm.py models dir)                  #
 # ------------------------------------------------------------------ #
 
-# App root: src/rag/downloader.py → ../../..
-_APP_ROOT_DL = Path(__file__).resolve().parent.parent.parent
+# App root: rag/downloader.py → ../..
+_APP_ROOT_DL = Path(__file__).resolve().parent.parent
 
 
 def _models_dir() -> str:
