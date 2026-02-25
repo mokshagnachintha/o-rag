@@ -78,22 +78,11 @@ jobs:
           rm -rf .buildozer/android/platform/build-arm64-v8a/dists/
           # Pin Cython to a version compatible with pyjnius (kivy dep)
           pip install "cython==0.29.37" --quiet
-          # Pre-write all Android SDK license hashes so sdkmanager never prompts
+          # Ensure ~/.android exists (needed by keytool / sdkmanager)
           mkdir -p ~/.android && touch ~/.android/repositories.cfg
-          mkdir -p $HOME/.buildozer/android/platform/android-sdk/licenses
-          printf "24333f8a63b6825ea9c5514f83c2829b004d1fee\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" \
-            > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-          printf "84831b9409646a918e30573bab4c9c91346d8abd\nd975f751698a77b662f1254ddbeed3901e976f5a\n" \
-            > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
-          printf "33b6a2b64607f11b759f320ef9dff4ae5c47d97a\n" \
-            > $HOME/.buildozer/android/platform/android-sdk/licenses/google-gdk-license
-          printf "d975f751698a77b662f1254ddbeed3901e976f5a\n" \
-            > $HOME/.buildozer/android/platform/android-sdk/licenses/intel-android-extra-license
-          printf "859f317696f67ef3d7f30a50a5560e7834b43903\n" \
-            > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-arm-dbt-license
-          # Build — pipe yes so any remaining interactive prompts are answered
-          yes 2>/dev/null | buildozer android debug 2>&1 | tee build.log
+          # Pipe yes to answer any SDK license prompts interactively
           # PIPESTATUS: 0=yes, 1=buildozer, 2=tee
+          yes 2>/dev/null | buildozer android debug 2>&1 | tee build.log
           exit ${PIPESTATUS[1]}
 
       # ── 9. Compile llama-server + bundle model + patch APK ── #
