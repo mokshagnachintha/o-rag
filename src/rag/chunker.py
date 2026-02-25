@@ -9,12 +9,19 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from collections import Counter
 
-# ---- optional PDF support (PyMuPDF) ----
+# ---- optional PDF support (PyMuPDF or pypdf fallback) ----
 try:
-    import fitz  # PyMuPDF
-    PDF_SUPPORT = True
+    import fitz  # PyMuPDF (desktop)
+    PDF_SUPPORT  = True
+    _PDF_BACKEND = "pymupdf"
 except ImportError:
-    PDF_SUPPORT = False
+    try:
+        import pypdf as _pypdf  # pure-Python fallback (Android)
+        PDF_SUPPORT  = True
+        _PDF_BACKEND = "pypdf"
+    except ImportError:
+        PDF_SUPPORT  = False
+        _PDF_BACKEND = None
 
 
 # ------------------------------------------------------------------ #
@@ -48,14 +55,19 @@ def _extract_txt(path: str) -> str:
 def _extract_pdf(path: str) -> str:
     if not PDF_SUPPORT:
         raise RuntimeError(
-            "PyMuPDF not installed. Install it with: pip install pymupdf"
+            "No PDF library available. Install pymupdf or pypdf."
         )
-    doc = fitz.open(path)
-    pages = []
-    for page in doc:
-        pages.append(page.get_text("text"))
-    doc.close()
-    return "\n".join(pages)
+    if _PDF_BACKEND == "pymupdf":
+        doc = fitz.open(path)
+        pages = [page.get_text("text") for page in doc]
+        doc.close()
+        return "\n".join(pages)
+    else:
+        # pypdf fallback
+        reader = _pypdf.PdfReader(path)
+        return "\n".join(
+            (p.extract_text() or "") for p in reader.pages
+        )
 
 
 def extract_text(path: str) -> str:

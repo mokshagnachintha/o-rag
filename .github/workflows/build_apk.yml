@@ -60,7 +60,58 @@ jobs:
           path: "*.gguf"
           key: gguf-model-Q5_K_M
 
-      # ── 6. Download the GGUF model (bundled into the APK) ──────────── #
+      # ── 6. Download llama-server ARM64 binary ────────────────────── #
+      - name: Download llama-server ARM64 Android binary
+        run: |
+          python3 - <<'EOF'
+          import urllib.request, json, zipfile, os, shutil
+
+          # Get latest llama.cpp release that has an Android ARM64 asset
+          with urllib.request.urlopen(
+              "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
+          ) as r:
+              releases = json.load(r)
+
+          asset_url = None
+          for release in releases:
+              for asset in release["assets"]:
+                  name = asset["name"].lower()
+                  if "android" in name and "arm64" in name and name.endswith(".zip"):
+                      asset_url = asset["browser_download_url"]
+                      print(f"Found: {asset['name']} in {release['tag_name']}")
+                      break
+              if asset_url:
+                  break
+
+          if not asset_url:
+              print("WARNING: No Android ARM64 llama.cpp release found — LLM will be unavailable")
+          else:
+              print(f"Downloading: {asset_url}")
+              urllib.request.urlretrieve(asset_url, "llama_android.zip")
+              with zipfile.ZipFile("llama_android.zip") as zf:
+                  zf.extractall("llama_android_tmp")
+              # Find llama-server binary
+              found = False
+              for root, dirs, files in os.walk("llama_android_tmp"):
+                  for f in files:
+                      if f in ("llama-server", "llama-server-android"):
+                          src = os.path.join(root, f)
+                          shutil.copy2(src, "llama-server-arm64")
+                          os.chmod("llama-server-arm64", 0o755)
+                          size_mb = os.path.getsize("llama-server-arm64") / 1_048_576
+                          print(f"llama-server-arm64 ready ({size_mb:.1f} MB)")
+                          found = True
+                          break
+                      if found:
+                          break
+              if not found:
+                  import glob
+                  files = glob.glob("llama_android_tmp/**/*", recursive=True)
+                  print("Files in zip:", "\n  ".join(files[:20]))
+                  print("WARNING: llama-server binary not found in release zip")
+          EOF
+
+      # ── 7. Download the GGUF model (bundled into the APK) ────────── #
       - name: Download GGUF model
         run: |
           pip install huggingface-hub
@@ -84,7 +135,7 @@ jobs:
               print(f"Downloaded: {dest} ({os.path.getsize(dest)/1_048_576:.0f} MB)")
           EOF
 
-      # ── 7. Build APK ─────────────────────────────────────────────── #
+      # ── 8. Build APK ─────────────────────────────────────────────── #
       - name: Build Android debug APK
         run: |
           # Accept all Android SDK licenses non-interactively

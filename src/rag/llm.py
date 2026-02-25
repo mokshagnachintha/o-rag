@@ -64,13 +64,64 @@ def _ollama_reachable() -> bool:
 _LLAMASERVER_PORT  = 8082
 _LLAMASERVER_PROC  = None
 _LLAMASERVER_LOCK  = threading.Lock()
+_ANDROID_EXE_PATH: Optional[str] = None   # set once by _ensure_android_binary
 
 
 def _bin_dir() -> Path:
     return _APP_ROOT / "llamacpp_bin"
 
 
+def _ensure_android_binary() -> Optional[str]:
+    """
+    Android-specific: copy the bundled ARM64 llama-server binary to
+    the app's codeCacheDir (which is executable on Android 8+) and
+    make it executable.  Returns the executable path, or None on failure.
+    Called once at startup when running on Android.
+    """
+    global _ANDROID_EXE_PATH
+    if _ANDROID_EXE_PATH is not None:
+        return _ANDROID_EXE_PATH
+
+    # Look for the binary in the p4a-extracted app directory
+    app_dir = Path(
+        os.environ.get("ANDROID_APP_PATH", "") or
+        os.path.join(os.environ.get("ANDROID_PRIVATE", ""), "app")
+    )
+    src = app_dir / "llama-server-arm64"
+    if not src.exists():
+        src = _APP_ROOT / "llama-server-arm64"   # desktop fallback
+    if not src.exists():
+        print("[llama-server] Bundled ARM64 binary not found.")
+        return None
+
+    try:
+        # Get the executable codeCacheDir via JNI (Android 8+)
+        from jnius import autoclass  # type: ignore
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        ctx            = PythonActivity.mActivity
+        code_cache     = Path(ctx.getCodeCacheDir().getAbsolutePath())
+        dest           = code_cache / "llama-server"
+
+        if not dest.exists():
+            import shutil
+            shutil.copy2(str(src), str(dest))
+            os.chmod(str(dest), 0o755)
+            print(f"[llama-server] Deployed to {dest} ({dest.stat().st_size//1024} KB)")
+
+        _ANDROID_EXE_PATH = str(dest)
+        return _ANDROID_EXE_PATH
+
+    except Exception as exc:
+        print(f"[llama-server] Failed to deploy Android binary: {exc}")
+        return None
+
+
 def _server_exe():
+    # 1. Android: use bundled ARM64 binary deployed to codeCacheDir
+    if os.environ.get("ANDROID_PRIVATE"):
+        return _ensure_android_binary()  # returns str path or None
+
+    # 2. Desktop: look in llamacpp_bin/ dir
     for p in [_bin_dir() / "llama-server.exe", _bin_dir() / "llama-server"]:
         if p.exists():
             return p
@@ -78,6 +129,8 @@ def _server_exe():
 
 
 def _extract_zip_if_needed() -> bool:
+    if os.environ.get("ANDROID_PRIVATE"):
+        return _server_exe() is not None   # on Android, skip ZIP handling
     if _server_exe() is not None:
         return True
     zip_path = _APP_ROOT / "llamacpp_bin.zip"
