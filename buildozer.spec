@@ -28,7 +28,12 @@ requirements =
     charset-normalizer,
     urllib3,
     pypdf,
-    plyer
+    plyer,
+    huggingface-hub,
+    tqdm,
+    filelock,
+    packaging,
+    fsspec
 
 # Android bootstrap
 p4a.bootstrap = sdl2
