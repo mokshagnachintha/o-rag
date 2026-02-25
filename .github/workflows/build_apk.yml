@@ -138,16 +138,20 @@ jobs:
       # ── 8. Build APK ─────────────────────────────────────────────── #
       - name: Build Android debug APK
         run: |
+          set -o pipefail
+          # Pin Cython to a version compatible with pyjnius (kivy dep)
+          pip install "cython==0.29.37" --quiet
           # Accept all Android SDK licenses non-interactively
           yes | buildozer android debug 2>&1 | tee build.log
 
-      # ── 8. Upload APK as artifact ─────────────────────────────────── #
+      # ── 9. Upload APK as artifact ─────────────────────────────────── #
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: OfflineRAG-debug-apk
           path: bin/*.apk
           retention-days: 30
+          if-no-files-found: error
 
       # ── 9. Upload build log if anything fails ─────────────── #
       - name: Upload build log (on failure)

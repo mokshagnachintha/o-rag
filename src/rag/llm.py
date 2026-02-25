@@ -95,12 +95,18 @@ def _ensure_android_binary() -> Optional[str]:
         return None
 
     try:
-        # Get the executable codeCacheDir via JNI (Android 8+)
-        from jnius import autoclass  # type: ignore
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        ctx            = PythonActivity.mActivity
-        code_cache     = Path(ctx.getCodeCacheDir().getAbsolutePath())
-        dest           = code_cache / "llama-server"
+        # Derive codeCacheDir from ANDROID_PRIVATE without needing jnius.
+        # ANDROID_PRIVATE = /data/user/0/<pkg>/files  (or /data/data/<pkg>/files)
+        # codeCacheDir    = /data/user/0/<pkg>/code_cache
+        priv = os.environ.get("ANDROID_PRIVATE", "")
+        if priv:
+            pkg_dir    = Path(priv).parent   # strip trailing /files
+            code_cache = pkg_dir / "code_cache"
+        else:
+            code_cache = src.parent          # fallback: same dir as binary
+
+        code_cache.mkdir(parents=True, exist_ok=True)
+        dest = code_cache / "llama-server"
 
         if not dest.exists():
             import shutil
