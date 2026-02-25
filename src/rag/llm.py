@@ -72,113 +72,74 @@ def _bin_dir() -> Path:
     return _APP_ROOT / "llamacpp_bin"
 
 
-def _write_android_debug(priv: str, lines: list) -> None:
-    """Write diagnostic lines to ANDROID_PRIVATE/llama_debug.txt."""
-    try:
-        dbg = Path(priv) / "llama_debug.txt"
-        dbg.write_text("\n".join(lines))
-        print(f"[llama-server] debug → {dbg}")
-    except Exception as e:
-        print(f"[llama-server] debug write failed: {e}")
-
-
 def _ensure_android_binary() -> Optional[str]:
     """
-    Android-specific: copy the bundled ARM64 llama-server binary to
-    the app's codeCacheDir (which is executable on Android 8+) and
-    make it executable.  Returns the executable path, or None on failure.
-    Called once at startup when running on Android.
+    Android-specific: locate the bundled ARM64 llama-server binary.
+
+    The binary is bundled as lib/arm64-v8a/libllama_server.so in the APK.
+    Android's package installer extracts all .so files from lib/<abi>/ to
+    the app's nativeLibraryDir at install time with correct SELinux labels
+    that allow execve() — the ONLY reliable way to run native code on
+    modern Android (code_cache / data dirs block exec via SELinux).
+
+    No runtime extraction needed — just find the pre-installed path.
     """
     global _ANDROID_EXE_PATH, _ANDROID_BINARY_ERROR
     if _ANDROID_EXE_PATH is not None:
         return _ANDROID_EXE_PATH
 
-    priv = os.environ.get("ANDROID_PRIVATE", "")
-    if not priv:
-        _ANDROID_BINARY_ERROR = "ANDROID_PRIVATE env var not set"
+    if not os.environ.get("ANDROID_PRIVATE"):
         return None
 
+    priv = os.environ.get("ANDROID_PRIVATE", "")
     dbg: list[str] = [f"ANDROID_PRIVATE={priv}"]
 
-    # --- Use the system-managed codeCacheDir (has correct SELinux labels) ---
-    code_cache_path: Optional[str] = None
+    # Primary: nativeLibraryDir — set by Android package manager at install time
+    native_lib_dir: Optional[str] = None
     try:
         from android import mActivity  # type: ignore
-        code_cache_path = str(mActivity.getCodeCacheDir().getAbsolutePath())
-        dbg.append(f"codeCacheDir (Java)={code_cache_path}")
+        native_lib_dir = str(mActivity.getApplicationInfo().nativeLibraryDir)
+        dbg.append(f"nativeLibraryDir={native_lib_dir}")
     except Exception as e:
-        dbg.append(f"getCodeCacheDir failed: {e} — computing from ANDROID_PRIVATE")
-        code_cache_path = str(Path(priv).parent / "code_cache")
+        dbg.append(f"getApplicationInfo failed: {e}")
 
-    code_cache = Path(code_cache_path)
-    try:
-        code_cache.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        dbg.append(f"mkdir({code_cache}) failed: {e}")
-
-    dest = code_cache / "llama-server"
-    dbg.append(f"dest={dest}")
-
-    # Already extracted and valid — re-use
-    if dest.exists() and dest.stat().st_size > 100_000:
-        dbg.append(f"reusing cached binary ({dest.stat().st_size // 1024} KB)")
-        os.chmod(str(dest), 0o755)
-        _ANDROID_EXE_PATH = str(dest)
-        _write_android_debug(priv, dbg)
-        return _ANDROID_EXE_PATH
-
-    # --- Extract from APK using Python zipfile (no jnius fd issues) ---
-    import traceback as _tb
-    try:
-        from android import mActivity  # type: ignore
-        apk_path = str(mActivity.getPackageCodePath())
-        dbg.append(f"apk_path={apk_path}")
-
-        with zipfile.ZipFile(apk_path, "r") as zf:
-            all_names = zf.namelist()
-            asset_names = [n for n in all_names if n.startswith("assets/")]
-            dbg.append(f"APK has {len(all_names)} entries, {len(asset_names)} under assets/")
-            dbg.append(f"assets entries: {asset_names[:20]}")
-
-            entry = "assets/llama-server-arm64"
-            if entry not in all_names:
-                # Try alternate names
-                alts = [n for n in all_names if "llama" in n.lower() or "server" in n.lower()]
-                dbg.append(f"Entry '{entry}' NOT FOUND. Possible matches: {alts}")
+    if native_lib_dir:
+        exe = os.path.join(native_lib_dir, "libllama_server.so")
+        dbg.append(f"checking {exe}")
+        if os.path.isfile(exe):
+            sz = os.path.getsize(exe)
+            dbg.append(f"FOUND: {sz // 1024} KB")
+            print(f"[llama-server] native lib: {exe} ({sz // 1024} KB)")
+            # Write debug info to app private storage
+            try:
+                Path(priv, "llama_debug.txt").write_text("\n".join(dbg))
+            except Exception:
+                pass
+            _ANDROID_EXE_PATH = exe
+            return exe
+        else:
+            # List what IS in nativeLibraryDir so we can diagnose wrong names
+            try:
+                present = os.listdir(native_lib_dir)
+                dbg.append(f"NOT FOUND. nativeLibraryDir contains: {present}")
                 _ANDROID_BINARY_ERROR = (
-                    f"Binary entry '{entry}' missing from APK.\n"
-                    f"APK has {len(asset_names)} asset entries: {asset_names[:10]}\n"
-                    f"Possible matches: {alts}"
+                    f"libllama_server.so not found in {native_lib_dir}.\n"
+                    f"Directory contains: {present}"
                 )
-                _write_android_debug(priv, dbg)
-                return None
+            except Exception as le:
+                dbg.append(f"listdir failed: {le}")
+                _ANDROID_BINARY_ERROR = (
+                    f"libllama_server.so not found in {native_lib_dir} "
+                    f"(listdir failed: {le})"
+                )
+    else:
+        _ANDROID_BINARY_ERROR = "Could not determine nativeLibraryDir"
 
-            info = zf.getinfo(entry)
-            dbg.append(f"entry size={info.file_size // 1024} KB compress={info.compress_type}")
-
-            with zf.open(info) as zin, open(str(dest), "wb") as fout:
-                written = 0
-                while True:
-                    chunk = zin.read(65536)
-                    if not chunk:
-                        break
-                    fout.write(chunk)
-                    written += len(chunk)
-
-        os.chmod(str(dest), 0o755)
-        actual = dest.stat().st_size
-        dbg.append(f"Extracted OK: {actual // 1024} KB → {dest}")
-        _write_android_debug(priv, dbg)
-        _ANDROID_EXE_PATH = str(dest)
-        return _ANDROID_EXE_PATH
-
-    except Exception as exc:
-        dbg.append(f"EXCEPTION: {exc}")
-        dbg.append(_tb.format_exc())
-        _ANDROID_BINARY_ERROR = f"{type(exc).__name__}: {exc}"
-        _write_android_debug(priv, dbg)
-        print(f"[llama-server] extraction failed: {exc}")
-
+    try:
+        Path(priv, "llama_debug.txt").write_text("\n".join(dbg))
+    except Exception:
+        pass
+    print(f"[llama-server] binary not found: {_ANDROID_BINARY_ERROR}")
     return None
 
 
