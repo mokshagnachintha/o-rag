@@ -65,10 +65,21 @@ _LLAMASERVER_PORT  = 8082
 _LLAMASERVER_PROC  = None
 _LLAMASERVER_LOCK  = threading.Lock()
 _ANDROID_EXE_PATH: Optional[str] = None   # set once by _ensure_android_binary
+_ANDROID_BINARY_ERROR: str = ""            # stores last extraction failure reason
 
 
 def _bin_dir() -> Path:
     return _APP_ROOT / "llamacpp_bin"
+
+
+def _write_android_debug(priv: str, lines: list) -> None:
+    """Write diagnostic lines to ANDROID_PRIVATE/llama_debug.txt."""
+    try:
+        dbg = Path(priv) / "llama_debug.txt"
+        dbg.write_text("\n".join(lines))
+        print(f"[llama-server] debug → {dbg}")
+    except Exception as e:
+        print(f"[llama-server] debug write failed: {e}")
 
 
 def _ensure_android_binary() -> Optional[str]:
@@ -78,51 +89,96 @@ def _ensure_android_binary() -> Optional[str]:
     make it executable.  Returns the executable path, or None on failure.
     Called once at startup when running on Android.
     """
-    global _ANDROID_EXE_PATH
+    global _ANDROID_EXE_PATH, _ANDROID_BINARY_ERROR
     if _ANDROID_EXE_PATH is not None:
         return _ANDROID_EXE_PATH
 
     priv = os.environ.get("ANDROID_PRIVATE", "")
     if not priv:
-        return None  # not running on Android
+        _ANDROID_BINARY_ERROR = "ANDROID_PRIVATE env var not set"
+        return None
 
-    # code_cache is on an executable mount on Android 8+
-    pkg_dir    = Path(priv).parent          # /data/data/<pkg>
-    code_cache = pkg_dir / "code_cache"
-    code_cache.mkdir(parents=True, exist_ok=True)
+    dbg: list[str] = [f"ANDROID_PRIVATE={priv}"]
+
+    # --- Use the system-managed codeCacheDir (has correct SELinux labels) ---
+    code_cache_path: Optional[str] = None
+    try:
+        from android import mActivity  # type: ignore
+        code_cache_path = str(mActivity.getCodeCacheDir().getAbsolutePath())
+        dbg.append(f"codeCacheDir (Java)={code_cache_path}")
+    except Exception as e:
+        dbg.append(f"getCodeCacheDir failed: {e} — computing from ANDROID_PRIVATE")
+        code_cache_path = str(Path(priv).parent / "code_cache")
+
+    code_cache = Path(code_cache_path)
+    try:
+        code_cache.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        dbg.append(f"mkdir({code_cache}) failed: {e}")
+
     dest = code_cache / "llama-server"
+    dbg.append(f"dest={dest}")
 
     # Already extracted and valid — re-use
     if dest.exists() and dest.stat().st_size > 100_000:
+        dbg.append(f"reusing cached binary ({dest.stat().st_size // 1024} KB)")
         os.chmod(str(dest), 0o755)
         _ANDROID_EXE_PATH = str(dest)
+        _write_android_debug(priv, dbg)
         return _ANDROID_EXE_PATH
 
-    # --- Extract from APK using Python zipfile (most reliable, no jnius) ---
-    # The APK is a ZIP file, readable directly by the process.
+    # --- Extract from APK using Python zipfile (no jnius fd issues) ---
+    import traceback as _tb
     try:
         from android import mActivity  # type: ignore
         apk_path = str(mActivity.getPackageCodePath())
-        print(f"[llama-server] APK path: {apk_path}")
-        entry = "assets/llama-server-arm64"
+        dbg.append(f"apk_path={apk_path}")
+
         with zipfile.ZipFile(apk_path, "r") as zf:
+            all_names = zf.namelist()
+            asset_names = [n for n in all_names if n.startswith("assets/")]
+            dbg.append(f"APK has {len(all_names)} entries, {len(asset_names)} under assets/")
+            dbg.append(f"assets entries: {asset_names[:20]}")
+
+            entry = "assets/llama-server-arm64"
+            if entry not in all_names:
+                # Try alternate names
+                alts = [n for n in all_names if "llama" in n.lower() or "server" in n.lower()]
+                dbg.append(f"Entry '{entry}' NOT FOUND. Possible matches: {alts}")
+                _ANDROID_BINARY_ERROR = (
+                    f"Binary entry '{entry}' missing from APK.\n"
+                    f"APK has {len(asset_names)} asset entries: {asset_names[:10]}\n"
+                    f"Possible matches: {alts}"
+                )
+                _write_android_debug(priv, dbg)
+                return None
+
             info = zf.getinfo(entry)
-            print(f"[llama-server] Entry size: {info.file_size // 1024} KB")
+            dbg.append(f"entry size={info.file_size // 1024} KB compress={info.compress_type}")
+
             with zf.open(info) as zin, open(str(dest), "wb") as fout:
+                written = 0
                 while True:
                     chunk = zin.read(65536)
                     if not chunk:
                         break
                     fout.write(chunk)
+                    written += len(chunk)
+
         os.chmod(str(dest), 0o755)
         actual = dest.stat().st_size
-        print(f"[llama-server] Extracted {actual // 1024} KB → {dest}")
+        dbg.append(f"Extracted OK: {actual // 1024} KB → {dest}")
+        _write_android_debug(priv, dbg)
         _ANDROID_EXE_PATH = str(dest)
         return _ANDROID_EXE_PATH
-    except Exception as exc:
-        print(f"[llama-server] zipfile extraction failed: {exc}")
 
-    print("[llama-server] ARM64 binary not found — no LLM backend.")
+    except Exception as exc:
+        dbg.append(f"EXCEPTION: {exc}")
+        dbg.append(_tb.format_exc())
+        _ANDROID_BINARY_ERROR = f"{type(exc).__name__}: {exc}"
+        _write_android_debug(priv, dbg)
+        print(f"[llama-server] extraction failed: {exc}")
+
     return None
 
 
@@ -160,6 +216,10 @@ def _wait_for_server(port: int, timeout: int = 120) -> bool:
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.time() + timeout
     while time.time() < deadline:
+        # Fail fast: if the process already died, stop waiting immediately
+        if _LLAMASERVER_PROC is not None and _LLAMASERVER_PROC.poll() is not None:
+            print(f"[llama-server] process exited early (code={_LLAMASERVER_PROC.returncode})")
+            return False
         try:
             with urllib.request.urlopen(url, timeout=2) as r:
                 if r.status == 200:
@@ -171,7 +231,7 @@ def _wait_for_server(port: int, timeout: int = 120) -> bool:
 
 
 def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
-    global _LLAMASERVER_PROC
+    global _LLAMASERVER_PROC, _ANDROID_BINARY_ERROR
     exe = _server_exe()
     if exe is None:
         return False
@@ -186,23 +246,55 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
             "--port",     str(_LLAMASERVER_PORT),
             "--host",     "127.0.0.1",
         ]
-        print(f"[llama-server] Starting server (port {_LLAMASERVER_PORT}) ...")
+        print(f"[llama-server] Starting: {cmd[0]}")
         print(f"  Model: {Path(model_path).name}")
         print("  Loading model into memory, please wait ...")
         cf = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        # On Android, write server log to a file so we can read it on failure
+        log_file = None
+        priv = os.environ.get("ANDROID_PRIVATE", "")
+        if priv:
+            try:
+                log_path = os.path.join(priv, "llama_server.log")
+                log_file = open(log_path, "wb")
+            except Exception:
+                pass
         try:
             _LLAMASERVER_PROC = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                cmd,
+                stdout=log_file if log_file else subprocess.DEVNULL,
+                stderr=log_file if log_file else subprocess.DEVNULL,
                 creationflags=cf,
             )
         except Exception as exc:
+            if log_file:
+                log_file.close()
+            _ANDROID_BINARY_ERROR = f"Popen failed: {type(exc).__name__}: {exc}"
             print(f"[llama-server] Launch failed: {exc}")
             return False
     ready = _wait_for_server(_LLAMASERVER_PORT, timeout=180)
     if not ready:
         _stop_llama_server()
-        print("[llama-server] Timed out waiting for server.")
+        # Read last 500 bytes from the log file for diagnostics
+        priv = os.environ.get("ANDROID_PRIVATE", "")
+        if priv:
+            try:
+                log_path = os.path.join(priv, "llama_server.log")
+                if os.path.isfile(log_path):
+                    with open(log_path, "rb") as lf:
+                        lf.seek(max(0, os.path.getsize(log_path) - 1000))
+                        tail = lf.read().decode("utf-8", errors="replace")
+                    _ANDROID_BINARY_ERROR = f"Server log tail: {tail}"
+                    print(f"[llama-server] server log: {tail}")
+            except Exception:
+                pass
+        print("[llama-server] Timed out / crashed waiting for server.")
         return False
+    if log_file:
+        try:
+            log_file.close()
+        except Exception:
+            pass
     print("[llama-server] Server ready.")
     return True
 
@@ -349,10 +441,11 @@ class LlamaCppModel:
                 return
 
             if os.environ.get("ANDROID_PRIVATE"):
+                detail = _ANDROID_BINARY_ERROR or "unknown error"
                 raise RuntimeError(
-                    "No LLM backend available.\n\n"
-                    "The bundled llama-server binary could not be loaded.\n"
-                    "Please reinstall the app from the latest release."
+                    f"No LLM backend available.\n\n"
+                    f"Binary extraction failed: {detail}\n\n"
+                    f"Debug log: $ANDROID_PRIVATE/llama_debug.txt"
                 )
             raise RuntimeError(
                 "No LLM backend available.\n\n"
