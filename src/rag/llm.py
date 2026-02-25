@@ -82,44 +82,63 @@ def _ensure_android_binary() -> Optional[str]:
     if _ANDROID_EXE_PATH is not None:
         return _ANDROID_EXE_PATH
 
-    # Look for the binary in the p4a-extracted app directory
-    app_dir = Path(
-        os.environ.get("ANDROID_APP_PATH", "") or
-        os.path.join(os.environ.get("ANDROID_PRIVATE", ""), "app")
-    )
-    src = app_dir / "llama-server-arm64"
-    if not src.exists():
-        src = _APP_ROOT / "llama-server-arm64"   # desktop fallback
-    if not src.exists():
-        print("[llama-server] Bundled ARM64 binary not found.")
-        return None
+    priv = os.environ.get("ANDROID_PRIVATE", "")
+    if priv:
+        pkg_dir    = Path(priv).parent   # strip trailing /files
+        code_cache = pkg_dir / "code_cache"
+    else:
+        code_cache = _APP_ROOT  # desktop fallback
 
-    try:
-        # Derive codeCacheDir from ANDROID_PRIVATE without needing jnius.
-        # ANDROID_PRIVATE = /data/user/0/<pkg>/files  (or /data/data/<pkg>/files)
-        # codeCacheDir    = /data/user/0/<pkg>/code_cache
-        priv = os.environ.get("ANDROID_PRIVATE", "")
-        if priv:
-            pkg_dir    = Path(priv).parent   # strip trailing /files
-            code_cache = pkg_dir / "code_cache"
-        else:
-            code_cache = src.parent          # fallback: same dir as binary
+    code_cache.mkdir(parents=True, exist_ok=True)
+    dest = code_cache / "llama-server"
 
-        code_cache.mkdir(parents=True, exist_ok=True)
-        dest = code_cache / "llama-server"
-
-        if not dest.exists():
-            import shutil
-            shutil.copy2(str(src), str(dest))
-            os.chmod(str(dest), 0o755)
-            print(f"[llama-server] Deployed to {dest} ({dest.stat().st_size//1024} KB)")
-
+    # Already extracted and valid — just re-use it
+    if dest.exists() and dest.stat().st_size > 100_000:
+        os.chmod(str(dest), 0o755)
         _ANDROID_EXE_PATH = str(dest)
         return _ANDROID_EXE_PATH
 
+    # --- Priority 1: extract from APK asset via AssetManager ---
+    try:
+        from android import mActivity  # type: ignore
+        am = mActivity.getAssets()
+        stream = am.open("llama-server-arm64")
+        CHUNK = 512 * 1024
+        written = 0
+        with open(str(dest), "wb") as f:
+            while True:
+                buf = stream.read(CHUNK)
+                if buf is None or len(buf) == 0:
+                    break
+                f.write(bytes(buf))
+                written += len(buf)
+        stream.close()
+        os.chmod(str(dest), 0o755)
+        print(f"[llama-server] Extracted from APK asset ({written//1024} KB) → {dest}")
+        _ANDROID_EXE_PATH = str(dest)
+        return _ANDROID_EXE_PATH
     except Exception as exc:
-        print(f"[llama-server] Failed to deploy Android binary: {exc}")
-        return None
+        print(f"[llama-server] APK asset extraction failed: {exc}")
+
+    # --- Priority 2: look for binary alongside Python source files ---
+    for candidate in [
+        Path(os.environ.get("ANDROID_APP_PATH", "")) / "llama-server-arm64",
+        Path(os.path.join(priv, "app")) / "llama-server-arm64" if priv else None,
+        _APP_ROOT / "llama-server-arm64",
+    ]:
+        if candidate and candidate.exists():
+            try:
+                import shutil
+                shutil.copy2(str(candidate), str(dest))
+                os.chmod(str(dest), 0o755)
+                print(f"[llama-server] Deployed from {candidate.name} ({dest.stat().st_size//1024} KB)")
+                _ANDROID_EXE_PATH = str(dest)
+                return _ANDROID_EXE_PATH
+            except Exception as exc:
+                print(f"[llama-server] Copy failed: {exc}")
+
+    print("[llama-server] ARM64 binary not found — no LLM backend.")
+    return None
 
 
 def _server_exe():

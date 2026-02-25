@@ -64,20 +64,24 @@ jobs:
       - name: Download llama-server ARM64 Android binary
         run: |
           python3 - <<'EOF'
-          import urllib.request, json, zipfile, os, shutil
+          import urllib.request, json, zipfile, os, shutil, glob as _glob
 
           # Get latest llama.cpp release that has an Android ARM64 asset
-          with urllib.request.urlopen(
-              "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
-          ) as r:
+          req = urllib.request.Request(
+              "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10",
+              headers={"User-Agent": "build-script"}
+          )
+          with urllib.request.urlopen(req) as r:
               releases = json.load(r)
 
           asset_url = None
+          asset_name = None
           for release in releases:
               for asset in release["assets"]:
                   name = asset["name"].lower()
                   if "android" in name and "arm64" in name and name.endswith(".zip"):
                       asset_url = asset["browser_download_url"]
+                      asset_name = asset["name"]
                       print(f"Found: {asset['name']} in {release['tag_name']}")
                       break
               if asset_url:
@@ -90,25 +94,36 @@ jobs:
               urllib.request.urlretrieve(asset_url, "llama_android.zip")
               with zipfile.ZipFile("llama_android.zip") as zf:
                   zf.extractall("llama_android_tmp")
-              # Find llama-server binary
+
+              # List all files for diagnostics
+              all_files = _glob.glob("llama_android_tmp/**/*", recursive=True)
+              print("Files in zip:", "\n  ".join(sorted(all_files)[:40]))
+
+              # Find llama-server binary — match any file that looks like a server binary
               found = False
               for root, dirs, files in os.walk("llama_android_tmp"):
-                  for f in files:
-                      if f in ("llama-server", "llama-server-android"):
+                  for f in sorted(files):
+                      fl = f.lower()
+                      # Accept: llama-server, llama-server-android, llama-server-*, server
+                      if fl.startswith("llama-server") or fl == "server":
                           src = os.path.join(root, f)
+                          # Skip shared libraries
+                          if fl.endswith(".so") or fl.endswith(".dll"):
+                              continue
+                          sz = os.path.getsize(src)
+                          if sz < 100_000:   # skip tiny stub files
+                              continue
                           shutil.copy2(src, "llama-server-arm64")
                           os.chmod("llama-server-arm64", 0o755)
-                          size_mb = os.path.getsize("llama-server-arm64") / 1_048_576
-                          print(f"llama-server-arm64 ready ({size_mb:.1f} MB)")
+                          size_mb = sz / 1_048_576
+                          print(f"llama-server-arm64 ready: {f} ({size_mb:.1f} MB)")
                           found = True
                           break
-                      if found:
-                          break
+                  if found:
+                      break
+
               if not found:
-                  import glob
-                  files = glob.glob("llama_android_tmp/**/*", recursive=True)
-                  print("Files in zip:", "\n  ".join(files[:20]))
-                  print("WARNING: llama-server binary not found in release zip")
+                  print("WARNING: llama-server binary not found in release zip — LLM backend unavailable")
           EOF
 
       # ── 8. Build APK ─────────────────────────────────────────────── #
@@ -153,31 +168,35 @@ jobs:
 
           # --- 9b. Patch the APK: strip old signature, add model as ZIP_STORED ---
           python3 - <<'PYEOF'
-          import zipfile, glob, os, shutil
+          import zipfile, glob, os
 
           apk_path   = glob.glob("bin/*.apk")[0]
           model_path = glob.glob("model_tmp/*.gguf")[0]
-          tmp_path   = apk_path + ".patching.tmp"
+          bin_src    = "llama-server-arm64"
 
-          print(f"Patching {apk_path}  ({os.path.getsize(apk_path)//1_048_576} MB)")
-          print(f"Adding model {model_path}  ({os.path.getsize(model_path)//1_048_576} MB)")
+          print(f"Source APK:  {apk_path}  ({os.path.getsize(apk_path)//1_048_576} MB)")
+          print(f"Model:       {model_path}  ({os.path.getsize(model_path)//1_048_576} MB)")
+          has_bin = os.path.exists(bin_src)
+          if has_bin:
+              print(f"Binary:      {bin_src}  ({os.path.getsize(bin_src)//1024} KB)")
+          else:
+              print("WARNING: llama-server-arm64 NOT FOUND — LLM backend will be unavailable!")
 
-          # Re-pack APK without META-INF (signature), then add model uncompressed
+          # ── Pass 1: copy existing entries + add model (STORED, no compression) ──
+          tmp_path = apk_path + ".patching.tmp"
+          CHUNK = 4 * 1024 * 1024
+
           with zipfile.ZipFile(apk_path, "r") as src, \
                zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as dst:
 
-              # Copy all existing entries except the JAR signature
               for item in src.infolist():
                   if item.filename.startswith("META-INF/"):
                       continue
-                  data = src.read(item.filename)
-                  dst.writestr(item, data)
+                  dst.writestr(item, src.read(item.filename))
 
-              # Add the GGUF as a stored (uncompressed) entry — chunked, memory-efficient
-              print("Adding model entry (ZIP_STORED — no compression)…")
+              print("Adding model (ZIP_STORED)…")
               info = zipfile.ZipInfo("assets/models/model.gguf")
               info.compress_type = zipfile.ZIP_STORED
-              CHUNK = 4 * 1024 * 1024   # 4 MB
               written = 0
               with open(model_path, "rb") as mf, dst.open(info, "w") as zout:
                   while True:
@@ -186,10 +205,22 @@ jobs:
                           break
                       zout.write(chunk)
                       written += len(chunk)
-                      print(f"  {written // 1_048_576} MB written…", flush=True)
+                      print(f"  {written // 1_048_576} MB…", flush=True)
+
+              # Add binary inside the same pass (avoids a second full APK re-pack)
+              if has_bin:
+                  print("Adding llama-server-arm64 (ZIP_STORED)…")
+                  bin_info = zipfile.ZipInfo("llama-server-arm64")
+                  bin_info.compress_type = zipfile.ZIP_STORED
+                  with open(bin_src, "rb") as bf, dst.open(bin_info, "w") as zout:
+                      while True:
+                          chunk = bf.read(CHUNK)
+                          if not chunk:
+                              break
+                          zout.write(chunk)
 
           os.replace(tmp_path, apk_path)
-          print(f"Done.  New APK size: {os.path.getsize(apk_path)//1_048_576} MB")
+          print(f"Done.  Final APK size: {os.path.getsize(apk_path)//1_048_576} MB")
           PYEOF
 
           # --- 9c. Create a debug signing keystore ---
