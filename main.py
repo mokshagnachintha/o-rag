@@ -15,6 +15,10 @@ from kivy.config import Config
 Config.set("kivy", "window_icon", "assets/icon.png")
 # ─────────────────────────────────────────────────────────────────── #
 
+# Keep input bar visible above the soft keyboard on Android
+from kivy.core.window import Window
+Window.softinput_mode = "below_target"
+
 from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager, FadeTransition
 from kivy.uix.boxlayout import BoxLayout

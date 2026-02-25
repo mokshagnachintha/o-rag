@@ -25,6 +25,7 @@ from kivy.uix.progressbar   import ProgressBar
 from kivy.clock             import Clock, mainthread
 from kivy.metrics           import dp, sp
 from kivy.graphics          import Color, RoundedRectangle, Rectangle
+from kivy.animation         import Animation
 
 # ── Palette ───────────────────────────────────────────────────────── #
 _BG        = (0.102, 0.102, 0.102, 1)   # #1a1a1a  page background
@@ -348,6 +349,7 @@ class ChatScreen(Screen):
         self._has_docs:       bool                    = False
         self._pending_attach: str | None              = None   # path of staged file
         self._attach_card:    AttachmentPreviewCard | None = None
+        self._scroll_pending: bool                   = False   # debounce auto-scroll
         self._build_ui()
 
     # ---------------------------------------------------------------- #
@@ -399,7 +401,7 @@ class ChatScreen(Screen):
         # ── Input area (attachment strip + bar) ─────────────────────── #
         input_area = BoxLayout(
             orientation="vertical",
-            size_hint=(1, None), height=dp(70),
+            size_hint=(1, None), height=dp(74),
         )
         _paint(input_area, _HDR_BG)
 
@@ -413,20 +415,20 @@ class ChatScreen(Screen):
         input_area.add_widget(self._attach_strip)
 
         bar = BoxLayout(
-            size_hint=(1, None), height=dp(70),
-            padding=[dp(10), dp(10), dp(10), dp(10)],
+            size_hint=(1, None), height=dp(74),
+            padding=[dp(10), dp(8), dp(10), dp(8)],
             spacing=dp(8),
         )
 
         # [+] attach button
         add_btn = Button(
-            text="＋",
-            font_size=sp(22), bold=True,
-            size_hint=(None, None), size=(dp(44), dp(44)),
+            text="+",
+            font_size=sp(26), bold=True,
+            size_hint=(None, None), size=(dp(48), dp(48)),
             background_normal="", background_color=(0, 0, 0, 0),
             color=_WHITE,
         )
-        _paint(add_btn, _ADD_BG, radius=22)
+        _paint(add_btn, _ADD_BG, radius=24)
         add_btn.bind(on_release=self._on_attach)
         bar.add_widget(add_btn)
 
@@ -456,12 +458,12 @@ class ChatScreen(Screen):
             anchor_x="center", anchor_y="center",
         )
         send_btn = Button(
-            text="↑", font_size=sp(18), bold=True,
-            size_hint=(None, None), size=(dp(34), dp(34)),
+            text="↑", font_size=sp(20), bold=True,
+            size_hint=(None, None), size=(dp(40), dp(40)),
             background_normal="", background_color=(0, 0, 0, 0),
             color=_WHITE,
         )
-        _paint(send_btn, _GREEN, radius=17)
+        _paint(send_btn, _GREEN, radius=20)
         send_btn.bind(on_release=self._on_send)
         send_anc.add_widget(send_btn)
 
@@ -558,7 +560,7 @@ class ChatScreen(Screen):
         # Expand the strip to show the card
         self._attach_strip.height = dp(80)
         # Grow the whole input_area
-        self._attach_strip.parent.height = dp(150)
+        self._attach_strip.parent.height = dp(154)
 
     @mainthread
     def _remove_attachment(self):
@@ -567,7 +569,7 @@ class ChatScreen(Screen):
         self._attach_card    = None
         self._attach_strip.clear_widgets()
         self._attach_strip.height = 0
-        self._attach_strip.parent.height = dp(70)
+        self._attach_strip.parent.height = dp(74)
 
     def _start_ingest(self, path: str, fname: str):
         card = DocStatusCard(fname)
@@ -667,7 +669,10 @@ class ChatScreen(Screen):
             self._current_row = self._add_msg("", role="assistant")
         if self._current_row:
             self._current_row.append(token)
-            Clock.schedule_once(lambda *_: self._scroll_down(), 0.02)
+            # Debounce: scroll at most once every 120 ms to stay smooth
+            if not self._scroll_pending:
+                self._scroll_pending = True
+                Clock.schedule_once(self._do_scroll, 0.12)
 
     @mainthread
     def _on_done(self, success: bool, message: str):
@@ -709,5 +714,12 @@ class ChatScreen(Screen):
             self._msgs.remove_widget(self._typing)
             self._typing = None
 
+    def _do_scroll(self, *_):
+        """Debounced scroll — called at most every 120 ms during streaming."""
+        self._scroll_pending = False
+        self._scroll_down()
+
     def _scroll_down(self):
-        self._scroll.scroll_y = 0
+        """Smoothly animate to bottom of chat."""
+        Animation.stop_all(self._scroll, "scroll_y")
+        Animation(scroll_y=0, duration=0.15, t="out_quad").start(self._scroll)
