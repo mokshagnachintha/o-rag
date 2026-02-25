@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch:   # lets you trigger manually from GitHub website
+  workflow_dispatch:
 
 jobs:
   build-apk:
@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # ── 1. Checkout code ──────────────────────────────────── #
+      # ── 1. Checkout ───────────────────────────────────────── #
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -28,12 +28,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ── 4. Install system dependencies ───────────────────── #
+      # ── 4. System packages ────────────────────────────────── #
       - name: Install system packages
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            git zip unzip \
+            git zip unzip ninja-build \
             autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libtinfo5 cmake libffi-dev libssl-dev \
@@ -86,168 +86,120 @@ jobs:
           # Exit with buildozer exit code (not tee's)
           exit ${PIPESTATUS[0]}
 
-      # ── 9. Bundle GGUF model into APK (post-process, bypass Gradle) ── #
-      - name: Bundle GGUF model into APK
+      # ── 9. Compile llama-server + bundle model + patch APK ── #
+      - name: Bundle server binary and GGUF model into APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
 
-          # --- 9a. Get llama-server ARM64 binary ---
-          echo "=== Getting llama-server ARM64 binary ==="
+          # ── 9a. Compile llama-server for Android ARM64 ───────────────
+          echo "=== Step 9a: Compiling llama-server for Android ARM64 ==="
 
-          # Method 1: Download pre-built binary using authenticated gh CLI
-          LATEST_TAG=$(gh release list --repo ggml-org/llama.cpp --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null)
-          echo "Latest llama.cpp tag: $LATEST_TAG"
-          mkdir -p llama_dl
-          gh release download "$LATEST_TAG" --repo ggml-org/llama.cpp --pattern "*android*arm64*" --dir llama_dl 2>&1 || echo "gh download failed"
-          ls -la llama_dl/ 2>/dev/null || echo "llama_dl empty"
+          NDK_HOME=$(find $HOME/.buildozer/android/platform -maxdepth 1 \
+            -name "android-ndk-*" -type d | head -1)
+          TOOLCHAIN="$NDK_HOME/build/cmake/android.toolchain.cmake"
 
-          # Extract llama-server from downloaded zip
-          python3 - <<'BINEOF'
-          import zipfile, os, shutil, glob
+          echo "NDK: $NDK_HOME"
+          echo "Toolchain: $TOOLCHAIN"
 
-          found = False
-          for zpath in glob.glob("llama_dl/*.zip"):
-              print(f"Extracting {zpath}...")
-              with zipfile.ZipFile(zpath) as zf:
-                  zf.extractall("llama_dl_extracted")
-              for root, dirs, files in os.walk("llama_dl_extracted"):
-                  for f in sorted(files):
-                      if "llama-server" in f.lower() and not f.endswith(".so"):
-                          src = os.path.join(root, f)
-                          sz = os.path.getsize(src)
-                          if sz > 100_000:
-                              shutil.copy2(src, "llama-server-arm64")
-                              os.chmod("llama-server-arm64", 0o755)
-                              print(f"Binary ready: {f} ({sz//1024} KB)")
-                              found = True
-                              break
-                  if found:
-                      break
-          if not found:
-              print("Pre-built binary not found in download")
-          BINEOF
-
-          # Method 2: Compile from source (fallback if download failed)
-          if [ ! -f "llama-server-arm64" ] || [ ! -s "llama-server-arm64" ]; then
-            echo "Falling back to source compilation..."
-            NDK_TOOLCHAIN=$(find $HOME/.buildozer/android/platform -name "android.toolchain.cmake" 2>/dev/null | head -1)
-            echo "NDK toolchain: $NDK_TOOLCHAIN"
-
-            if [ -n "$NDK_TOOLCHAIN" ] && [ -d "llama_cpp_src" ]; then
-              # Find the NDK clang compiler explicitly
-              NDK_ROOT=$(dirname $(dirname $(dirname "$NDK_TOOLCHAIN")))
-              CLANG=$(find "$NDK_ROOT" -name "aarch64-linux-android*-clang" -type f 2>/dev/null | head -1)
-              echo "NDK root: $NDK_ROOT"
-              echo "Clang: $CLANG"
-
-              cmake -S llama_cpp_src -B llama_cpp_src/build_android \
-                -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
-                -DANDROID_ABI=arm64-v8a \
-                -DANDROID_PLATFORM=android-26 \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DLLAMA_BUILD_SERVER=ON \
-                -DGGML_NATIVE=OFF \
-                -DBUILD_SHARED_LIBS=OFF \
-                -DLLAMA_CURL=OFF 2>&1
-
-              cmake --build llama_cpp_src/build_android --target llama-server -j$(nproc) 2>&1
-
-              BIN=$(find llama_cpp_src/build_android -name "llama-server" -not -name "*.so" -type f 2>/dev/null | head -1)
-              if [ -n "$BIN" ]; then
-                cp "$BIN" llama-server-arm64
-                chmod +x llama-server-arm64
-                echo "Compiled binary: $(du -sh llama-server-arm64)"
-              else
-                echo "ERROR: cmake compilation produced no binary"
-                find llama_cpp_src/build_android -type f 2>/dev/null | head -30
-              fi
-            else
-              echo "ERROR: NDK toolchain not found"
-            fi
+          if [ ! -f "$TOOLCHAIN" ]; then
+            echo "FATAL: Android NDK toolchain not found!"
+            find $HOME/.buildozer/android/platform -name "android.toolchain.cmake" 2>/dev/null
+            exit 1
           fi
 
-          if [ -f "llama-server-arm64" ] && [ -s "llama-server-arm64" ]; then
-            echo "llama-server-arm64 READY: $(du -sh llama-server-arm64)"
-          else
-            echo "CRITICAL: llama-server-arm64 NOT AVAILABLE — LLM backend will be broken"
-          fi
+          cmake -S llama_cpp_src -B llama_build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_SERVER_VERBOSE=OFF
+          echo "cmake configure done (exit $?)"
 
-          # --- 9b. Download the GGUF model ---
-          echo "=== Downloading GGUF model ==="
+          cmake --build llama_build --target llama-server -j$(nproc)
+          echo "cmake build done (exit $?)"
+
+          BIN=$(find llama_build -name "llama-server" -type f 2>/dev/null | head -1)
+          echo "Binary found at: $BIN"
+          if [ -z "$BIN" ]; then
+            echo "ERROR: llama-server not found. All built files:"
+            find llama_build -type f 2>/dev/null | head -40
+            exit 1
+          fi
+          cp "$BIN" llama-server-arm64
+          chmod 755 llama-server-arm64
+          echo "SUCCESS: $(du -sh llama-server-arm64)"
+
+          # ── 9b. Download GGUF model ───────────────────────────────────
+          echo "=== Step 9b: Downloading Gemma GGUF model ==="
           pip install huggingface-hub --quiet
           python3 - <<'PYEOF'
-          import os, sys
+          import os
           from huggingface_hub import hf_hub_download
           path = hf_hub_download(
-              repo_id  = "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-              filename = "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q4_K_M.gguf",
-              local_dir= "model_tmp",
+              repo_id="mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
+              filename="Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q4_K_M.gguf",
+              local_dir="model_tmp",
               local_dir_use_symlinks=False,
           )
-          size_mb = os.path.getsize(path) // 1_048_576
-          print(f"Downloaded: {path}  ({size_mb} MB)")
+          print(f"Model: {path} ({os.path.getsize(path)//1_048_576} MB)")
           PYEOF
 
-          # --- 9b. Patch the APK: strip old signature, add model as ZIP_STORED ---
+          # ── 9c. Patch APK — inject model + binary in one pass ────────
+          echo "=== Step 9c: Patching APK ==="
           python3 - <<'PYEOF'
           import zipfile, glob, os
 
-          apk_path   = glob.glob("bin/*.apk")[0]
-          model_path = glob.glob("model_tmp/*.gguf")[0]
-          bin_src    = "llama-server-arm64"
-
-          print(f"Source APK:  {apk_path}  ({os.path.getsize(apk_path)//1_048_576} MB)")
-          print(f"Model:       {model_path}  ({os.path.getsize(model_path)//1_048_576} MB)")
-          has_bin = os.path.exists(bin_src)
-          if has_bin:
-              print(f"Binary:      {bin_src}  ({os.path.getsize(bin_src)//1024} KB)")
-          else:
-              print("WARNING: llama-server-arm64 NOT FOUND — LLM backend will be unavailable!")
-
-          # ── Pass 1: copy existing entries + add model (STORED, no compression) ──
-          tmp_path = apk_path + ".patching.tmp"
+          apk   = glob.glob("bin/*.apk")[0]
+          model = glob.glob("model_tmp/*.gguf")[0]
+          srv   = "llama-server-arm64"
+          tmp   = apk + ".tmp"
           CHUNK = 4 * 1024 * 1024
 
-          with zipfile.ZipFile(apk_path, "r") as src, \
-               zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as dst:
+          print(f"APK:    {apk}  ({os.path.getsize(apk)//1_048_576} MB)")
+          print(f"Model:  {model}  ({os.path.getsize(model)//1_048_576} MB)")
+          print(f"Binary: {srv}  ({os.path.getsize(srv)//1024} KB)")
+
+          with zipfile.ZipFile(apk, "r") as src, \
+               zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as dst:
 
               for item in src.infolist():
                   if item.filename.startswith("META-INF/"):
                       continue
                   dst.writestr(item, src.read(item.filename))
 
-              print("Adding model (ZIP_STORED)…")
-              info = zipfile.ZipInfo("assets/models/model.gguf")
-              info.compress_type = zipfile.ZIP_STORED
+              print("Adding model (ZIP_STORED, uncompressed)...")
+              mi = zipfile.ZipInfo("assets/models/model.gguf")
+              mi.compress_type = zipfile.ZIP_STORED
               written = 0
-              with open(model_path, "rb") as mf, dst.open(info, "w") as zout:
-                  while True:
-                      chunk = mf.read(CHUNK)
-                      if not chunk:
-                          break
-                      zout.write(chunk)
+              with open(model, "rb") as mf, dst.open(mi, "w") as zo:
+                  while chunk := mf.read(CHUNK):
+                      zo.write(chunk)
                       written += len(chunk)
-                      print(f"  {written // 1_048_576} MB…", flush=True)
+                      if written % (100*1024*1024) == 0:
+                          print(f"  {written//1_048_576} MB...", flush=True)
 
-              # Add binary inside the same pass (avoids a second full APK re-pack)
-              if has_bin:
-                  print("Adding llama-server-arm64 (ZIP_STORED)…")
-                  bin_info = zipfile.ZipInfo("llama-server-arm64")
-                  bin_info.compress_type = zipfile.ZIP_STORED
-                  with open(bin_src, "rb") as bf, dst.open(bin_info, "w") as zout:
-                      while True:
-                          chunk = bf.read(CHUNK)
-                          if not chunk:
-                              break
-                          zout.write(chunk)
+              print("Adding llama-server-arm64 (ZIP_STORED)...")
+              bi = zipfile.ZipInfo("llama-server-arm64")
+              bi.compress_type = zipfile.ZIP_STORED
+              bi.external_attr = 0o755 << 16
+              with open(srv, "rb") as bf, dst.open(bi, "w") as zo:
+                  while chunk := bf.read(CHUNK):
+                      zo.write(chunk)
 
-          os.replace(tmp_path, apk_path)
-          print(f"Done.  Final APK size: {os.path.getsize(apk_path)//1_048_576} MB")
+          os.replace(tmp, apk)
+          print(f"Done. Final APK: {os.path.getsize(apk)//1_048_576} MB")
           PYEOF
 
-          # --- 9c. Create a debug signing keystore ---
+          # ── 9d. Sign APK ──────────────────────────────────────────────
+          echo "=== Step 9d: Signing APK ==="
           mkdir -p ~/.android
           keytool -genkey -v \
             -keystore ~/.android/debug.keystore \
@@ -257,19 +209,15 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US" \
             -noprompt 2>/dev/null || true
 
-          # --- 9d. Re-sign with apksigner from Android build-tools ---
           APKSIGNER=$(find $HOME/.buildozer/android/platform/android-sdk/build-tools \
             -name "apksigner" -type f 2>/dev/null | sort -V | tail -1)
-          echo "apksigner: $APKSIGNER"
-
           APK=$(find bin -name "*.apk" | head -1)
           "$APKSIGNER" sign \
             --ks ~/.android/debug.keystore \
-            --ks-pass pass:android \
-            --key-pass pass:android \
+            --ks-pass pass:android --key-pass pass:android \
             "$APK"
 
-          echo "=== Final bundled APK ==="
+          echo "=== FINAL APK ==="
           ls -lh bin/*.apk
 
       # ── 10. Upload APK as artifact ─────────────────────────────────── #
