@@ -5,7 +5,7 @@ package.name   = offlinerag
 package.domain = com.yourname
 
 source.dir    = .
-source.include_exts = py,png,jpg,kv,atlas,db,gguf
+source.include_exts = py,png,jpg,kv,atlas,db
 # Include the pre-built ARM64 llama-server binary (no extension)
 source.include_patterns = llama-server-arm64
 source.exclude_dirs = __pycache__,.git,.venv,venv,.mypy_cache,quantize,llamacpp_bin,p4a-recipes
@@ -53,10 +53,6 @@ android.allow_backup = False
 
 # Extra Java options for model loading
 android.add_jvm_options = -Xmx768m
-
-# Store .gguf as-is in the APK (no compression) to avoid Gradle Java OOM
-# when bundling large 800 MB+ model files.
-android.no_compress = gguf
 
 # App icon
 icon.filename      = %(source.dir)s/assets/icon.png

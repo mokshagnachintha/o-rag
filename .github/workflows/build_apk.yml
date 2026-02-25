@@ -111,44 +111,11 @@ jobs:
                   print("WARNING: llama-server binary not found in release zip")
           EOF
 
-      # ── 7b. Cache GGUF model (avoids re-downloading 851 MB each run) ── #
-      - name: Cache GGUF model
-        uses: actions/cache@v4
-        with:
-          path: "*.gguf"
-          key: gguf-model-Gemma-3-1B-Q5_K_M
-
-      # ── 7c. Download GGUF model (skipped if cache hit) ───────────── #
-      - name: Download GGUF model
-        run: |
-          pip install huggingface-hub --quiet
-          python3 - <<'EOF'
-          import os, shutil
-          from huggingface_hub import hf_hub_download
-
-          filename = "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q5_K_M.gguf"
-          dest     = os.path.join(os.getcwd(), filename)
-          if os.path.isfile(dest):
-              print(f"Cache hit — already exists ({os.path.getsize(dest)/1_048_576:.0f} MB): {dest}")
-          else:
-              print(f"Downloading {filename} from Hugging Face…")
-              path = hf_hub_download(
-                  repo_id  = "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-                  filename = filename,
-                  local_dir= ".",
-                  local_dir_use_symlinks=False,
-              )
-              if os.path.abspath(path) != os.path.abspath(dest):
-                  shutil.copy2(path, dest)
-              print(f"Downloaded: {os.path.getsize(dest)/1_048_576:.0f} MB → {dest}")
-          EOF
-
       # ── 8. Build APK ─────────────────────────────────────────────── #
       - name: Build Android debug APK
         env:
           # Give the Gradle daemon enough heap for asset processing
-          # android.no_compress = gguf means Gradle won't buffer the model data
-          GRADLE_OPTS: "-Xmx6g -XX:MaxMetaspaceSize=512m"
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m"
         run: |
           # Confirm Java version
           java -version
