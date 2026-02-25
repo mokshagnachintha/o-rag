@@ -255,41 +255,35 @@ def extract_from_apk_asset(
             return
 
         try:
-            am = mActivity.getAssets()
+            import zipfile as _zf
 
-            # openFd() gives a raw Unix file descriptor — works only for
-            # ZIP_STORED (uncompressed) entries, which is exactly how we pack
-            # the model. Use it for both size reporting AND the actual copy.
-            afd    = am.openFd(asset_name)
-            start  = int(afd.getStartOffset())    # byte offset of asset in APK
-            total  = int(afd.getDeclaredLength()) # exact asset size in bytes
-            pfd    = afd.getParcelFileDescriptor()
-            raw_fd = os.dup(pfd.getFd())           # dup so we own it
-            pfd.close()
-            afd.close()
-            os.lseek(raw_fd, start, os.SEEK_SET)  # seek to asset content
+            apk_path = str(mActivity.getPackageCodePath())
+            print(f"[downloader] APK path: {apk_path}")
 
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            entry = f"assets/{asset_name}"
+            with _zf.ZipFile(apk_path, "r") as zf:
+                info  = zf.getinfo(entry)
+                total = info.file_size
+                print(f"[downloader] Entry={entry} size={total//1_048_576} MB")
 
-            copied = 0
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                copied = 0
 
-            if on_progress:
-                on_progress(0.0, "Extracting bundled model…")
+                if on_progress:
+                    on_progress(0.0, "Extracting bundled model…")
 
-            with os.fdopen(raw_fd, "rb") as src, open(dest, "wb") as f:
-                remaining = total
-                while remaining > 0:
-                    chunk = src.read(min(1024 * 512, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    copied += len(chunk)
-                    remaining -= len(chunk)
-                    if on_progress and total > 0:
-                        frac  = min(copied / total, 0.99)
-                        mb_d  = copied // 1_048_576
-                        mb_t  = total  // 1_048_576
-                        on_progress(frac, f"Extracting model… {mb_d} / {mb_t} MB")
+                with zf.open(info) as zin, open(dest, "wb") as f:
+                    while True:
+                        chunk = zin.read(1024 * 512)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        copied += len(chunk)
+                        if on_progress and total > 0:
+                            frac = min(copied / total, 0.99)
+                            mb_d = copied // 1_048_576
+                            mb_t = total  // 1_048_576
+                            on_progress(frac, f"Extracting model… {mb_d} / {mb_t} MB")
 
             if on_progress:
                 on_progress(1.0, "Extraction complete.")

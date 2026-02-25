@@ -83,69 +83,44 @@ def _ensure_android_binary() -> Optional[str]:
         return _ANDROID_EXE_PATH
 
     priv = os.environ.get("ANDROID_PRIVATE", "")
-    if priv:
-        pkg_dir    = Path(priv).parent   # strip trailing /files
-        code_cache = pkg_dir / "code_cache"
-    else:
-        code_cache = _APP_ROOT  # desktop fallback
+    if not priv:
+        return None  # not running on Android
 
+    # code_cache is on an executable mount on Android 8+
+    pkg_dir    = Path(priv).parent          # /data/data/<pkg>
+    code_cache = pkg_dir / "code_cache"
     code_cache.mkdir(parents=True, exist_ok=True)
     dest = code_cache / "llama-server"
 
-    # Already extracted and valid — just re-use it
+    # Already extracted and valid — re-use
     if dest.exists() and dest.stat().st_size > 100_000:
         os.chmod(str(dest), 0o755)
         _ANDROID_EXE_PATH = str(dest)
         return _ANDROID_EXE_PATH
 
-    # --- Priority 1: extract from APK asset via AssetManager ---
+    # --- Extract from APK using Python zipfile (most reliable, no jnius) ---
+    # The APK is a ZIP file, readable directly by the process.
     try:
         from android import mActivity  # type: ignore
-        am = mActivity.getAssets()
-        # openFd() returns an AssetFileDescriptor that gives a real Unix fd.
-        # This works for ZIP_STORED (uncompressed) entries — which is exactly
-        # how we store the binary in the APK.
-        afd    = am.openFd("llama-server-arm64")
-        start  = int(afd.getStartOffset())    # offset of asset inside APK
-        length = int(afd.getDeclaredLength()) # exact byte count
-        pfd    = afd.getParcelFileDescriptor()
-        raw_fd = os.dup(pfd.getFd())           # dup so we own the fd
-        pfd.close()
-        afd.close()
-        os.lseek(raw_fd, start, os.SEEK_SET)  # seek to asset start
-        written = 0
-        with os.fdopen(raw_fd, "rb") as src, open(str(dest), "wb") as dst:
-            remaining = length
-            while remaining > 0:
-                chunk = src.read(min(65536, remaining))
-                if not chunk:
-                    break
-                dst.write(chunk)
-                written += len(chunk)
-                remaining -= len(chunk)
+        apk_path = str(mActivity.getPackageCodePath())
+        print(f"[llama-server] APK path: {apk_path}")
+        entry = "assets/llama-server-arm64"
+        with zipfile.ZipFile(apk_path, "r") as zf:
+            info = zf.getinfo(entry)
+            print(f"[llama-server] Entry size: {info.file_size // 1024} KB")
+            with zf.open(info) as zin, open(str(dest), "wb") as fout:
+                while True:
+                    chunk = zin.read(65536)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
         os.chmod(str(dest), 0o755)
-        print(f"[llama-server] Extracted from APK asset ({written//1024} KB) → {dest}")
+        actual = dest.stat().st_size
+        print(f"[llama-server] Extracted {actual // 1024} KB → {dest}")
         _ANDROID_EXE_PATH = str(dest)
         return _ANDROID_EXE_PATH
     except Exception as exc:
-        print(f"[llama-server] APK asset extraction failed: {exc}")
-
-    # --- Priority 2: look for binary alongside Python source files ---
-    for candidate in [
-        Path(os.environ.get("ANDROID_APP_PATH", "")) / "llama-server-arm64",
-        Path(os.path.join(priv, "app")) / "llama-server-arm64" if priv else None,
-        _APP_ROOT / "llama-server-arm64",
-    ]:
-        if candidate and candidate.exists():
-            try:
-                import shutil
-                shutil.copy2(str(candidate), str(dest))
-                os.chmod(str(dest), 0o755)
-                print(f"[llama-server] Deployed from {candidate.name} ({dest.stat().st_size//1024} KB)")
-                _ANDROID_EXE_PATH = str(dest)
-                return _ANDROID_EXE_PATH
-            except Exception as exc:
-                print(f"[llama-server] Copy failed: {exc}")
+        print(f"[llama-server] zipfile extraction failed: {exc}")
 
     print("[llama-server] ARM64 binary not found — no LLM backend.")
     return None
