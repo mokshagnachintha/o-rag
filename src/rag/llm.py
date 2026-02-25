@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import glob
 import json
+import re
 import subprocess
 import threading
 import time
@@ -467,14 +468,30 @@ class LlamaCppModel:
         """
         Generate a response.  stream_cb (if given) is called with each
         new token fragment as it arrives.  Returns the full response text.
+        Thinking-model reasoning blocks are automatically stripped.
         """
         if self._backend == "none":
             raise RuntimeError("No model loaded. Call load() first.")
+
+        # Wrap stream_cb with the thinking-token filter
+        filtered_cb = None
+        think_filter: Optional[_ThinkingStreamFilter] = None
+        if stream_cb is not None:
+            think_filter = _ThinkingStreamFilter(stream_cb)
+            filtered_cb  = think_filter
+
         if self._backend == "llama_cpp":
-            return self._gen_llama_cpp(prompt, max_tokens, temperature, top_p, stream_cb)
-        if self._backend == "ollama":
-            return self._gen_ollama(prompt, max_tokens, temperature, top_p, stream_cb)
-        return _gen_via_server(prompt, max_tokens, temperature, top_p, stream_cb)
+            raw = self._gen_llama_cpp(prompt, max_tokens, temperature, top_p, filtered_cb)
+        elif self._backend == "ollama":
+            raw = self._gen_ollama(prompt, max_tokens, temperature, top_p, filtered_cb)
+        else:
+            raw = _gen_via_server(prompt, max_tokens, temperature, top_p, filtered_cb)
+
+        if think_filter is not None:
+            think_filter.flush()
+
+        # Strip thinking blocks from the full returned string too
+        return _strip_thinking(raw)
 
     def _gen_llama_cpp(self, prompt, max_tokens, temp, top_p, stream_cb):
         with self._lock:
@@ -531,6 +548,71 @@ class LlamaCppModel:
 
 
 # ------------------------------------------------------------------ #
+#  Thinking-token filter                                               #
+# ------------------------------------------------------------------ #
+
+def _strip_thinking(text: str) -> str:
+    """
+    Remove internal reasoning blocks that thinking models emit before
+    the real answer.  Handles several common tag styles.
+    """
+    # Standard <think>...</think> (Qwen, DeepSeek, GLM thinking variants)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # Pipe-delimited variants  <|think|>...</|think|>
+    text = re.sub(r'<\|think\|>.*?</\|think\|>', '', text, flags=re.DOTALL)
+    # Some models wrap reasoning in triple-backtick reasoning blocks
+    text = re.sub(r'```reasoning.*?```', '', text, flags=re.DOTALL)
+    return text.strip()
+
+
+class _ThinkingStreamFilter:
+    """
+    Wraps a stream_cb so that tokens inside <think>…</think> blocks are
+    suppressed; only the real answer tokens are forwarded to the UI.
+    """
+    def __init__(self, cb):
+        self._cb     = cb
+        self._buf    = ""    # accumulates tokens we haven't decided about yet
+        self._depth  = 0     # nesting level inside <think> block
+        self._past   = False # True once we've seen </think>
+
+    def __call__(self, token: str):
+        self._buf += token
+        while True:
+            if self._depth == 0:
+                # Not inside a think block — look for opening tag
+                idx = self._buf.find("<think>")
+                if idx == -1:
+                    # No think tag anywhere — flush all buffered tokens
+                    if self._buf:
+                        self._cb(self._buf)
+                        self._buf = ""
+                    break
+                else:
+                    # Flush everything before the tag, then swallow from tag onward
+                    if idx > 0:
+                        self._cb(self._buf[:idx])
+                    self._buf  = self._buf[idx + len("<think>"):]
+                    self._depth = 1
+            else:
+                # Inside a think block — look for closing tag
+                idx = self._buf.find("</think>")
+                if idx == -1:
+                    # Haven't seen closing tag yet — keep buffering
+                    break
+                else:
+                    self._buf   = self._buf[idx + len("</think>"):]
+                    self._depth = 0
+                    self._past  = True
+
+    def flush(self):
+        """Call after generation ends to emit any remaining buffered tokens."""
+        if self._buf and self._depth == 0:
+            self._cb(self._buf)
+            self._buf = ""
+
+
+# ------------------------------------------------------------------ #
 #  Prompt builder                                                      #
 # ------------------------------------------------------------------ #
 
@@ -543,7 +625,8 @@ def build_rag_prompt(context_chunks: list[str], question: str) -> str:
     system_msg = (
         "You are a helpful assistant. "
         "Answer ONLY based on the provided context. "
-        "If the answer is not in the context, say \"I don't know.\""
+        "If the answer is not in the context, say \"I don't know.\". "
+        "Reply with only your final answer — no reasoning steps, no thinking process."
     )
     return (
         f"<start_of_turn>user\n"
@@ -564,7 +647,11 @@ def build_direct_prompt(
 
     history: list of (user_text, assistant_text) pairs from previous turns.
     """
-    system_msg = "You are a helpful, friendly AI assistant."
+    system_msg = (
+        "You are a helpful, friendly AI assistant. "
+        "Give clear, concise answers. "
+        "Reply with only your final answer — no reasoning steps, no thinking process, no internal monologue."
+    )
     parts: list[str] = []
 
     # Include up to the last 6 turns of history to keep context manageable
