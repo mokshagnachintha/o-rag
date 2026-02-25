@@ -221,6 +221,7 @@ class DocsScreen(Screen):
                 (0.9, 0.8, 0.3, 1),
             )
 
+    @mainthread
     def _on_file_selected(self, selection):
         """Called by plyer when the user picks a file."""
         if not selection:

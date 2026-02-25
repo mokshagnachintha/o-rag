@@ -347,8 +347,8 @@ class LlamaCppModel:
       3. llama-server      (auto-extracted from llamacpp_bin.zip)
     """
 
-    DEFAULT_CTX      = 2048
-    DEFAULT_MAX_TOK  = 512
+    DEFAULT_CTX      = 4096
+    DEFAULT_MAX_TOK  = 768
     DEFAULT_TEMP     = 0.7
     DEFAULT_TOP_P    = 0.9
     DEFAULT_THREADS  = 4
@@ -625,6 +625,8 @@ def build_rag_prompt(context_chunks: list[str], question: str) -> str:
     system_msg = (
         "You are a helpful assistant. "
         "Answer ONLY based on the provided context. "
+        "Write at least 2-3 sentences — never give a one-word answer. "
+        "Do NOT just repeat the question. "
         "If the answer is not in the context, say \"I don't know.\". "
         "Reply with only your final answer — no reasoning steps, no thinking process."
     )

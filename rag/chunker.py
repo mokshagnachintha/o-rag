@@ -85,7 +85,6 @@ def resolve_uri(path: str) -> str:
         from jnius import autoclass  # type: ignore
         PythonActivity   = autoclass("org.kivy.android.PythonActivity")
         Uri              = autoclass("android.net.Uri")
-        FileOutputStream = autoclass("java.io.FileOutputStream")
         ctx = PythonActivity.mActivity
         uri = Uri.parse(path)
         # Get the display name from the content resolver
@@ -96,21 +95,25 @@ def resolve_uri(path: str) -> str:
             if idx >= 0:
                 name = cursor.getString(idx)
             cursor.close()
-        # Copy bytes to private storage
+        # Copy bytes to private storage using ParcelFileDescriptor so we
+        # get a real Unix fd — avoids jnius bytearray/byte[] incompatibility.
         dest_dir = os.path.join(
             os.environ.get("ANDROID_PRIVATE", "/tmp"), "attachments"
         )
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, name)
-        inp = ctx.getContentResolver().openInputStream(uri)
-        out = FileOutputStream(dest)
-        buf = bytearray(65536)
-        n = inp.read(buf)
-        while n != -1:
-            out.write(buf, 0, n)
-            n = inp.read(buf)
-        out.close()
-        inp.close()
+        pfd = ctx.getContentResolver().openFileDescriptor(uri, "r")
+        fd_int = pfd.detachFd()
+        try:
+            with os.fdopen(fd_int, "rb") as src_f:
+                data = src_f.read()
+        finally:
+            try:
+                pfd.close()
+            except Exception:
+                pass
+        with open(dest, "wb") as out_f:
+            out_f.write(data)
         return dest
     except Exception as e:
         print(f"[resolve_uri] failed: {e}")
