@@ -70,8 +70,56 @@ def _extract_pdf(path: str) -> str:
         )
 
 
+def resolve_uri(path: str) -> str:
+    """
+    On Android, plyer.filechooser returns a content:// URI instead of a
+    real file path.  Copy the content into app-private storage and return
+    the real path so Python's open() / pypdf can read it.
+    On all other platforms (or if path is already a file path) returns path
+    unchanged.
+    """
+    import os
+    if not path.startswith("content://"):
+        return path
+    try:
+        from jnius import autoclass  # type: ignore
+        PythonActivity   = autoclass("org.kivy.android.PythonActivity")
+        Uri              = autoclass("android.net.Uri")
+        FileOutputStream = autoclass("java.io.FileOutputStream")
+        ctx = PythonActivity.mActivity
+        uri = Uri.parse(path)
+        # Get the display name from the content resolver
+        cursor = ctx.getContentResolver().query(uri, None, None, None, None)
+        name = "attachment"
+        if cursor and cursor.moveToFirst():
+            idx = cursor.getColumnIndex("_display_name")
+            if idx >= 0:
+                name = cursor.getString(idx)
+            cursor.close()
+        # Copy bytes to private storage
+        dest_dir = os.path.join(
+            os.environ.get("ANDROID_PRIVATE", "/tmp"), "attachments"
+        )
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, name)
+        inp = ctx.getContentResolver().openInputStream(uri)
+        out = FileOutputStream(dest)
+        buf = bytearray(65536)
+        n = inp.read(buf)
+        while n != -1:
+            out.write(buf, 0, n)
+            n = inp.read(buf)
+        out.close()
+        inp.close()
+        return dest
+    except Exception as e:
+        print(f"[resolve_uri] failed: {e}")
+        return path
+
+
 def extract_text(path: str) -> str:
-    """Return plain text from .txt or .pdf file."""
+    """Return plain text from .txt or .pdf file (resolves content:// URIs)."""
+    path = resolve_uri(path)
     ext = Path(path).suffix.lower()
     if ext == ".pdf":
         return _extract_pdf(path)

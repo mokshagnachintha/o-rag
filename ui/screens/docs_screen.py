@@ -201,10 +201,16 @@ class DocsScreen(Screen):
     def _on_browse(self, *_):
         """Open the native file chooser. Falls back to manual input if plyer unavailable."""
         try:
+            import os
             from plyer import filechooser
+            # Android requires MIME types; desktop uses glob filters
+            if os.environ.get("ANDROID_PRIVATE"):
+                filters = ["application/pdf", "text/plain"]
+            else:
+                filters = [["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]]
             filechooser.open_file(
                 on_selection = self._on_file_selected,
-                filters      = [["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]],
+                filters      = filters,
                 title        = "Choose a document",
                 multiple     = False,
             )
@@ -219,7 +225,8 @@ class DocsScreen(Screen):
         """Called by plyer when the user picks a file."""
         if not selection:
             return
-        path = selection[0]
+        from rag.chunker import resolve_uri
+        path = resolve_uri(selection[0])  # handle content:// URI on Android
         self._ingest(path)
 
     # ── manual path fallback ─────────────────────────────────────── #

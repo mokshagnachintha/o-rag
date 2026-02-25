@@ -648,9 +648,11 @@ def build_direct_prompt(
     history: list of (user_text, assistant_text) pairs from previous turns.
     """
     system_msg = (
-        "You are a helpful, friendly AI assistant. "
-        "Give clear, concise answers. "
-        "Reply with only your final answer — no reasoning steps, no thinking process, no internal monologue."
+        "You are a knowledgeable, helpful AI assistant. "
+        "Answer the user's question directly and completely. "
+        "Write at least 2-3 sentences. "
+        "Do NOT just repeat the question or echo back one word. "
+        "Reply with only your final answer — no reasoning steps, no thinking process."
     )
     parts: list[str] = []
 

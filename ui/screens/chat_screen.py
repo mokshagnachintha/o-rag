@@ -520,18 +520,24 @@ class ChatScreen(Screen):
 
     def _on_attach(self, *_):
         try:
+            import os
             from plyer import filechooser
+            # Android requires MIME types; desktop uses glob filters
+            if os.environ.get("ANDROID_PRIVATE"):
+                filters = ["application/pdf", "text/plain"]
+            else:
+                filters = [["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]]
             filechooser.open_file(
                 on_selection=self._on_file_chosen,
-                filters=[["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]],
+                filters=filters,
                 title="Pick a document",
                 multiple=False,
             )
-        except Exception:
+        except Exception as e:
             self._add_msg(
                 "File picker unavailable on this device.\n"
                 "Type the [b]full path[/b] to your file and send it — "
-                "e.g. [i]/sdcard/Download/report.pdf[/i]",
+                f"e.g. [i]/sdcard/Download/report.pdf[/i]",
                 role="assistant",
             )
 
@@ -539,7 +545,8 @@ class ChatScreen(Screen):
     def _on_file_chosen(self, selection):
         if not selection:
             return
-        path = selection[0]
+        from rag.chunker import resolve_uri
+        path = resolve_uri(selection[0])  # handle content:// on Android
         self._stage_attachment(path)
 
     def _stage_attachment(self, path: str):
@@ -679,8 +686,12 @@ class ChatScreen(Screen):
         self._hide_typing()
         if success:
             if not self._has_docs and self._pending_q and self._current_row:
-                ans = self._current_row._lbl.text
-                self._history.append((self._pending_q, ans))
+                # Strip Kivy markup tags before storing in history so the
+                # raw text is sent to the model (markup tokens corrupt prompts)
+                import re
+                raw_ans = re.sub(r'\[/?[a-zA-Z][^\]]*\]', '',
+                                 self._current_row._lbl.text).strip()
+                self._history.append((self._pending_q, raw_ans))
                 if len(self._history) > 10:
                     self._history = self._history[-10:]
         else:
