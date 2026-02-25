@@ -53,9 +53,9 @@ _NAV_ITEMS = [
     ("settings", "⚙  Settings"),
 ]
 
-_ACTIVE_COLOR   = (0.27, 0.51, 0.96, 1)
-_INACTIVE_COLOR = (0.40, 0.40, 0.45, 1)
-_BG_COLOR       = (0.10, 0.10, 0.13, 1)
+_ACTIVE_COLOR   = (0.098, 0.761, 0.490, 1)   # ChatGPT green  #19c37d
+_INACTIVE_COLOR = (0.30, 0.30, 0.33, 1)
+_BG_COLOR       = (0.102, 0.102, 0.102, 1)    # #1a1a1a
 
 
 class NavBar(BoxLayout):
@@ -97,7 +97,7 @@ class RootLayout(BoxLayout):
         super().__init__(orientation="vertical", **kw)
 
         with self.canvas.before:
-            Color(0.08, 0.08, 0.10, 1)  # dark background
+            Color(0.129, 0.129, 0.129, 1)  # #212121 ChatGPT dark
             self._bg = RoundedRectangle(radius=[0])
         self.bind(pos=lambda w, _: setattr(self._bg, "pos", w.pos),
                   size=lambda w, _: setattr(self._bg, "size", w.size))

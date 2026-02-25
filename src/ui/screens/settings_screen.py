@@ -54,8 +54,8 @@ class ModelRow(BoxLayout):
 
     def _draw_bg(self):
         with self.canvas.before:
-            Color(0.15, 0.15, 0.19, 1)
-            self._bg = RoundedRectangle(radius=[dp(8)])
+            Color(0.184, 0.184, 0.184, 1)
+            self._bg = RoundedRectangle(radius=[dp(10)])
         self.bind(pos=lambda w, _: setattr(self._bg, "pos", w.pos),
                   size=lambda w, _: setattr(self._bg, "size", w.size))
 
@@ -112,13 +112,13 @@ class ModelRow(BoxLayout):
                 self._status_lbl.text  = "Downloaded"
                 self._status_lbl.color = (0.55, 0.55, 0.55, 1)
                 self._btn.text             = "Load"
-                self._btn.background_color = (0.27, 0.51, 0.96, 1)
+                self._btn.background_color = (0.098, 0.761, 0.490, 1)
                 self._btn.disabled         = False
         else:
             self._status_lbl.text  = f"~{self.meta['size_mb']} MB  not downloaded"
             self._status_lbl.color = (0.55, 0.55, 0.55, 1)
             self._btn.text             = "Download"
-            self._btn.background_color = (0.20, 0.55, 0.35, 1)
+            self._btn.background_color = (0.098, 0.500, 0.350, 1)
             self._btn.disabled         = False
 
     # ---- progress bar helpers ----
@@ -200,16 +200,24 @@ class SettingsScreen(Screen):
     def _build_ui(self):
         root = BoxLayout(orientation="vertical")
 
+        # ---- page bg ----
+        with root.canvas.before:
+            Color(0.129, 0.129, 0.129, 1)
+            self._root_bg = RoundedRectangle()
+        root.bind(pos=lambda w,_: setattr(self._root_bg,'pos',w.pos),
+                  size=lambda w,_: setattr(self._root_bg,'size',w.size))
+
         # ---- header ----
-        header = BoxLayout(size_hint=(1, None), height=dp(50))
+        header = BoxLayout(size_hint=(1, None), height=dp(54))
         with header.canvas.before:
-            Color(0.13, 0.13, 0.16, 1)
+            Color(0.102, 0.102, 0.102, 1)
             self._hdr_rect = RoundedRectangle(radius=[0])
         header.bind(pos=lambda w, _: setattr(self._hdr_rect, "pos", w.pos),
                     size=lambda w, _: setattr(self._hdr_rect, "size", w.size))
         header.add_widget(Label(
             text="[b]Models[/b]", markup=True,
             color=(1, 1, 1, 1), font_size=sp(16),
+            halign="center", valign="middle",
         ))
         root.add_widget(header)
 
@@ -294,24 +302,26 @@ class SettingsScreen(Screen):
             color=(0.6, 0.6, 0.6, 1),
         ))
         bar = BoxLayout(
-            size_hint=(1, None), height=dp(52),
-            spacing=dp(6), padding=[dp(8), dp(6)],
+            size_hint=(1, None), height=dp(60),
+            spacing=dp(8), padding=[dp(12), dp(8)],
         )
         with bar.canvas.before:
-            Color(0.13, 0.13, 0.16, 1)
+            Color(0.102, 0.102, 0.102, 1)
             self._bar_bg = RoundedRectangle(radius=[0])
         bar.bind(pos=lambda w, _: setattr(self._bar_bg, "pos", w.pos),
                  size=lambda w, _: setattr(self._bar_bg, "size", w.size))
         self._path_in = TextInput(
             hint_text="Full path to .gguf file...",
-            multiline=False, size_hint=(1, 1), font_size=sp(12),
+            multiline=False, size_hint=(1, 1), font_size=sp(13),
             foreground_color=(1, 1, 1, 1),
-            background_color=(0.20, 0.20, 0.25, 1),
+            hint_text_color=(0.60, 0.60, 0.63, 1),
+            background_color=(0.231, 0.231, 0.231, 1),
+            cursor_color=(1, 1, 1, 1),
         )
         load_btn = Button(
-            text="Load", size_hint=(None, 1), width=dp(58),
-            font_size=sp(12), background_normal="",
-            background_color=(0.27, 0.51, 0.96, 1),
+            text="Load", size_hint=(None, 1), width=dp(64),
+            font_size=sp(13), background_normal="",
+            background_color=(0.098, 0.761, 0.490, 1),
         )
         load_btn.bind(on_release=lambda *_: self._load_model(
             self._path_in.text.strip(), self._on_manual_load_done
