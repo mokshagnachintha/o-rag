@@ -255,41 +255,37 @@ def extract_from_apk_asset(
             return
 
         try:
-            am     = mActivity.getAssets()
+            am = mActivity.getAssets()
 
-            # Get declared file size for progress reporting
-            try:
-                afd   = am.openFd(asset_name)
-                total = int(afd.getDeclaredLength())
-                afd.close()
-            except Exception:
-                total = DEFAULT_MODEL["size_mb"] * 1_048_576
-
-            stream = am.open(asset_name)
+            # openFd() gives a raw Unix file descriptor — works only for
+            # ZIP_STORED (uncompressed) entries, which is exactly how we pack
+            # the model. Use it for both size reporting AND the actual copy.
+            afd   = am.openFd(asset_name)
+            total = int(afd.getDeclaredLength())
+            pfd   = afd.getParcelFileDescriptor()
+            raw_fd = os.dup(pfd.getFd())
+            pfd.close()
+            afd.close()
 
             os.makedirs(os.path.dirname(dest), exist_ok=True)
 
             copied = 0
-            chunk  = 1024 * 512   # 512 KB
-            buf    = bytearray(chunk)
 
             if on_progress:
                 on_progress(0.0, "Extracting bundled model…")
 
-            with open(dest, "wb") as f:
+            with os.fdopen(raw_fd, "rb") as src, open(dest, "wb") as f:
                 while True:
-                    n = stream.read(buf)
-                    if n == -1:
+                    chunk = src.read(1024 * 512)
+                    if not chunk:
                         break
-                    f.write(buf[:n])
-                    copied += n
+                    f.write(chunk)
+                    copied += len(chunk)
                     if on_progress and total > 0:
-                        frac   = min(copied / total, 0.99)
-                        mb_d   = copied // 1_048_576
-                        mb_t   = total  // 1_048_576
+                        frac  = min(copied / total, 0.99)
+                        mb_d  = copied // 1_048_576
+                        mb_t  = total  // 1_048_576
                         on_progress(frac, f"Extracting model… {mb_d} / {mb_t} MB")
-
-            stream.close()
 
             if on_progress:
                 on_progress(1.0, "Extraction complete.")
