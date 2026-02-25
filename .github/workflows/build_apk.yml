@@ -117,15 +117,19 @@ jobs:
           # Give the Gradle daemon enough heap for asset processing
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m"
         run: |
-          set -o pipefail
           # Confirm Java version
           java -version
           # Delete stale Gradle dist - regenerates fresh under current JDK
           rm -rf .buildozer/android/platform/build-arm64-v8a/dists/
           # Pin Cython to a version compatible with pyjnius (kivy dep)
           pip install "cython==0.29.37" --quiet
-          # Accept all Android SDK licenses non-interactively
-          yes | buildozer android debug 2>&1 | tee build.log
+          # Accept Android SDK licenses explicitly (avoids yes-pipe exit code issue)
+          mkdir -p ~/.android && touch ~/.android/repositories.cfg
+          yes 2>/dev/null | $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          # Build
+          buildozer android debug 2>&1 | tee build.log
+          # Exit with buildozer exit code (not tee's)
+          exit ${PIPESTATUS[0]}
 
       # ── 9. Upload APK as artifact ─────────────────────────────────── #
       - name: Upload APK
