@@ -37,6 +37,8 @@ _WHITE     = (1,    1,    1,    1)
 _MUTED     = (0.55, 0.55, 0.58, 1)
 _DIVIDER   = (0.20, 0.20, 0.20, 1)
 _DOC_CARD  = (0.12, 0.22, 0.17, 1)      # dark teal for doc status card
+_ATTACH_BG = (0.165, 0.165, 0.165, 1)   # attachment preview card background
+_RED_ICON  = (0.85, 0.18, 0.18, 1)      # PDF icon red
 
 
 # ------------------------------------------------------------------ #
@@ -141,6 +143,91 @@ class MessageRow(BoxLayout):
 
     def append(self, token: str):
         self._lbl.text += token
+
+
+# ------------------------------------------------------------------ #
+#  Attachment preview card (ChatGPT-style, shown above input bar)     #
+# ------------------------------------------------------------------ #
+
+class AttachmentPreviewCard(BoxLayout):
+    """
+    Shows a PDF/TXT attachment thumbnail above the message input,
+    matching the ChatGPT attachment card style.
+    """
+    def __init__(self, filepath: str, on_remove, **kw):
+        import os
+        super().__init__(
+            orientation="horizontal",
+            size_hint=(None, None),
+            size=(dp(220), dp(68)),
+            padding=[dp(10), dp(8), dp(8), dp(8)],
+            spacing=dp(10),
+            **kw,
+        )
+        _paint(self, _ATTACH_BG, radius=14)
+
+        fname = os.path.basename(filepath)
+        ext   = os.path.splitext(fname)[1].upper().lstrip(".") or "FILE"
+        try:
+            sz_kb = os.path.getsize(filepath) // 1024
+            size_txt = f"{sz_kb} KB" if sz_kb < 1024 else f"{sz_kb//1024} MB"
+        except Exception:
+            size_txt = ""
+
+        # ── PDF/TXT icon box ────────────────────────────────────────── #
+        icon_box = BoxLayout(
+            size_hint=(None, None), size=(dp(42), dp(42)),
+        )
+        _paint(icon_box, _RED_ICON, radius=8)
+        icon_lbl = Label(
+            text=f"[b]{ext[:4]}[/b]", markup=True,
+            font_size=sp(10), color=_WHITE,
+            halign="center", valign="middle",
+        )
+        icon_lbl.bind(size=lambda w, _: setattr(w, "text_size", w.size))
+        icon_box.add_widget(icon_lbl)
+        self.add_widget(icon_box)
+
+        # ── Filename + size ─────────────────────────────────────────── #
+        info = BoxLayout(
+            orientation="vertical", size_hint=(1, 1), spacing=dp(2),
+        )
+        # Truncate long filenames
+        display = fname if len(fname) <= 22 else fname[:19] + "…"
+        name_lbl = Label(
+            text=f"[b]{display}[/b]", markup=True,
+            font_size=sp(12), color=_WHITE,
+            halign="left", valign="bottom",
+            size_hint_y=None, height=dp(22),
+        )
+        name_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+
+        type_lbl = Label(
+            text=f"{ext} · {size_txt}" if size_txt else ext,
+            font_size=sp(10.5), color=_MUTED,
+            halign="left", valign="top",
+            size_hint_y=None, height=dp(18),
+        )
+        type_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+
+        info.add_widget(name_lbl)
+        info.add_widget(type_lbl)
+        self.add_widget(info)
+
+        # ── × remove button ─────────────────────────────────────────── #
+        x_btn = Button(
+            text="✕", font_size=sp(13),
+            size_hint=(None, None), size=(dp(24), dp(24)),
+            background_normal="", background_color=(0, 0, 0, 0),
+            color=_MUTED,
+        )
+        x_btn.bind(on_release=lambda *_: on_remove())
+        anc = AnchorLayout(
+            size_hint=(None, 1), width=dp(28),
+            anchor_x="center", anchor_y="top",
+        )
+        anc.add_widget(x_btn)
+        self.add_widget(anc)
 
 
 # ------------------------------------------------------------------ #
@@ -254,11 +341,13 @@ class ChatScreen(Screen):
 
     def __init__(self, **kw):
         super().__init__(**kw)
-        self._history:     list                   = []
-        self._pending_q:   str                    = ""
-        self._current_row: MessageRow | None      = None
-        self._typing:      _TypingIndicator | None = None
-        self._has_docs:    bool                   = False
+        self._history:        list                    = []
+        self._pending_q:      str                     = ""
+        self._current_row:    MessageRow | None       = None
+        self._typing:         _TypingIndicator | None = None
+        self._has_docs:       bool                    = False
+        self._pending_attach: str | None              = None   # path of staged file
+        self._attach_card:    AttachmentPreviewCard | None = None
         self._build_ui()
 
     # ---------------------------------------------------------------- #
@@ -307,13 +396,27 @@ class ChatScreen(Screen):
             role="assistant",
         )
 
-        # ── Input bar ───────────────────────────────────────────────── #
+        # ── Input area (attachment strip + bar) ─────────────────────── #
+        input_area = BoxLayout(
+            orientation="vertical",
+            size_hint=(1, None), height=dp(70),
+        )
+        _paint(input_area, _HDR_BG)
+
+        # Attachment preview strip — hidden until a file is picked
+        self._attach_strip = BoxLayout(
+            orientation="horizontal",
+            size_hint=(1, None), height=0,
+            padding=[dp(10), dp(6), dp(10), dp(0)],
+        )
+        _paint(self._attach_strip, _HDR_BG)
+        input_area.add_widget(self._attach_strip)
+
         bar = BoxLayout(
             size_hint=(1, None), height=dp(70),
             padding=[dp(10), dp(10), dp(10), dp(10)],
             spacing=dp(8),
         )
-        _paint(bar, _HDR_BG)
 
         # [+] attach button
         add_btn = Button(
@@ -364,7 +467,8 @@ class ChatScreen(Screen):
 
         bar.add_widget(pill)
         bar.add_widget(send_anc)
-        root.add_widget(bar)
+        input_area.add_widget(bar)
+        root.add_widget(input_area)
 
         self.add_widget(root)
 
@@ -429,14 +533,41 @@ class ChatScreen(Screen):
                 role="assistant",
             )
 
+    @mainthread
     def _on_file_chosen(self, selection):
         if not selection:
             return
+        path = selection[0]
+        self._stage_attachment(path)
+
+    def _stage_attachment(self, path: str):
+        """Show the attachment preview card above the input bar."""
         import os
-        path  = selection[0]
-        fname = os.path.basename(path)
-        self._add_msg(f"📎  [b]{fname}[/b]", role="user")
-        self._start_ingest(path, fname)
+        self._pending_attach = path
+
+        # Remove any existing card
+        self._attach_strip.clear_widgets()
+
+        card = AttachmentPreviewCard(
+            filepath=path,
+            on_remove=self._remove_attachment,
+        )
+        self._attach_card = card
+        self._attach_strip.add_widget(card)
+
+        # Expand the strip to show the card
+        self._attach_strip.height = dp(80)
+        # Grow the whole input_area
+        self._attach_strip.parent.height = dp(150)
+
+    @mainthread
+    def _remove_attachment(self):
+        """Dismiss the staged attachment card."""
+        self._pending_attach = None
+        self._attach_card    = None
+        self._attach_strip.clear_widgets()
+        self._attach_strip.height = 0
+        self._attach_strip.parent.height = dp(70)
 
     def _start_ingest(self, path: str, fname: str):
         card = DocStatusCard(fname)
@@ -472,15 +603,13 @@ class ChatScreen(Screen):
     # ---------------------------------------------------------------- #
 
     def _maybe_load_path(self, text: str) -> bool:
-        """If user pastes a file path, ingest it rather than chat with it."""
+        """If user pastes a file path, stage it as an attachment."""
         import os
         s = text.strip()
         is_path = (s.startswith("/") or (len(s) > 2 and s[1] == ":")) \
                   and os.path.isfile(s)
         if is_path:
-            fname = os.path.basename(s)
-            self._add_msg(f"📎  [b]{fname}[/b]", role="user")
-            self._start_ingest(s, fname)
+            self._stage_attachment(s)
             return True
         return False
 
@@ -489,11 +618,29 @@ class ChatScreen(Screen):
     # ---------------------------------------------------------------- #
 
     def _on_send(self, *_):
-        q = self._input.text.strip()
-        if not q:
+        q    = self._input.text.strip()
+        path = self._pending_attach
+
+        # Nothing to do if both empty
+        if not q and not path:
             return
+
         self._input.text = ""
 
+        # If there is a staged file, ingest it first
+        if path:
+            import os
+            fname = os.path.basename(path)
+            self._remove_attachment()
+            # Show a user bubble with the attachment + any typed text
+            bubble_text = f"📎  [b]{fname}[/b]"
+            if q:
+                bubble_text += f"\n{q}"
+            self._add_msg(bubble_text, role="user")
+            self._start_ingest(path, fname)
+            return
+
+        # Plain text path typed into the input box
         if self._maybe_load_path(q):
             return
 
