@@ -43,3 +43,13 @@ Thumbs.db
 
 # Logs
 *.log
+build-log-*/
+bin_*/
+
+# Media / reference images (put these in a separate assets/ subfolder if needed)
+*.jpeg
+*.jpg
+!assets/*.png
+
+# Documents / papers
+*.pdf
