@@ -490,5 +490,35 @@ def build_rag_prompt(context_chunks: list[str], question: str) -> str:
     )
 
 
+def build_direct_prompt(
+    question: str,
+    history: list[tuple[str, str]] | None = None,
+) -> str:
+    """
+    Build a plain conversational prompt (no document context) using
+    Gemma's multi-turn <start_of_turn> format.
+
+    history: list of (user_text, assistant_text) pairs from previous turns.
+    """
+    system_msg = "You are a helpful, friendly AI assistant."
+    parts: list[str] = []
+
+    # Include up to the last 6 turns of history to keep context manageable
+    for user_msg, asst_msg in (history or [])[-6:]:
+        parts.append(
+            f"<start_of_turn>user\n{user_msg}<end_of_turn>\n"
+            f"<start_of_turn>model\n{asst_msg}<end_of_turn>\n"
+        )
+
+    # Current turn
+    parts.append(
+        f"<start_of_turn>user\n"
+        f"{system_msg}\n\n"
+        f"{question}<end_of_turn>\n"
+        f"<start_of_turn>model\n"
+    )
+    return "".join(parts)
+
+
 # Module-level singleton
 llm = LlamaCppModel()

@@ -177,6 +177,36 @@ class _TypingIndicator(BoxLayout):
         Clock.unschedule(self._animate)
 
 
+# ── Mode-pill colours ─────────────────────────────────────────────── #
+_PILL_ACTIVE   = _SEND_BG                          # green
+_PILL_INACTIVE = (0.22, 0.22, 0.22, 1)            # dark grey
+
+
+def _mode_pill(text: str, active: bool) -> Button:
+    """Small rounded pill toggle button for RAG / Chat header."""
+    btn = Button(
+        text             = text,
+        size_hint        = (None, None),
+        size             = (dp(72), dp(30)),
+        font_size        = sp(12),
+        bold             = active,
+        background_normal= "",
+        background_color = (0, 0, 0, 0),
+        color            = _TEXT_WHITE if active else _TEXT_MUTED,
+    )
+    color = _PILL_ACTIVE if active else _PILL_INACTIVE
+    with btn.canvas.before:
+        c = Color(*color)
+        r = RoundedRectangle(radius=[dp(15)])
+    btn.bind(
+        pos =lambda w, _: setattr(r, "pos",  w.pos),
+        size=lambda w, _: setattr(r, "size", w.size),
+    )
+    btn._pill_color = c
+    btn._pill_rect  = r
+    return btn
+
+
 # ------------------------------------------------------------------ #
 #  Chat Screen                                                         #
 # ------------------------------------------------------------------ #
@@ -184,6 +214,9 @@ class _TypingIndicator(BoxLayout):
 class ChatScreen(Screen):
     def __init__(self, **kw):
         super().__init__(**kw)
+        self._mode: str = "rag"          # "rag" | "chat"
+        self._history: list = []          # [(user_text, assistant_text), ...]
+        self._pending_q: str = ""         # user message waiting for answer
         self._current_row: MessageRow | None = None
         self._typing_indicator: _TypingIndicator | None = None
         self._build_ui()
@@ -195,21 +228,47 @@ class ChatScreen(Screen):
         _paint_bg(root, _BG)
 
         # ── Header ────────────────────────────────────────────────── #
-        header = BoxLayout(size_hint=(1, None), height=dp(54),
-                           padding=[dp(16), 0])
+        header = BoxLayout(
+            size_hint=(1, None), height=dp(54),
+            padding=[dp(12), dp(8)],
+            spacing=dp(8),
+        )
         _paint_bg(header, _HEADER_BG)
-        # thin bottom divider
+
+        # App title (left)
         header.add_widget(Label(
             text="[b]Offline RAG[/b]", markup=True,
-            color=_TEXT_WHITE, font_size=sp(16),
-            halign="center", valign="middle",
+            color=_TEXT_WHITE, font_size=sp(15),
+            size_hint=(1, 1),
+            halign="left", valign="middle",
         ))
+
+        # Mode toggle pills (right side of header)
+        self._rag_pill  = _mode_pill("📄 RAG",  active=True)
+        self._chat_pill = _mode_pill("💬 Chat", active=False)
+        self._rag_pill.bind( on_release=lambda *_: self._set_mode("rag"))
+        self._chat_pill.bind(on_release=lambda *_: self._set_mode("chat"))
+        header.add_widget(self._rag_pill)
+        header.add_widget(self._chat_pill)
+
         root.add_widget(header)
 
         # thin separator line
         sep = Widget(size_hint=(1, None), height=dp(1))
         _paint_bg(sep, _DIVIDER)
         root.add_widget(sep)
+
+        # ── Mode subtitle bar ─────────────────────────────────────── #
+        self._mode_bar = BoxLayout(size_hint=(1, None), height=dp(26),
+                                   padding=[dp(14), 0])
+        _paint_bg(self._mode_bar, _BG)
+        self._mode_lbl = Label(
+            text="Mode: [b]RAG[/b] — answers from your documents",
+            markup=True, font_size=sp(11),
+            color=_TEXT_MUTED, halign="left", valign="middle",
+        )
+        self._mode_bar.add_widget(self._mode_lbl)
+        root.add_widget(self._mode_bar)
 
         # ── Message list ──────────────────────────────────────────── #
         self._scroll = ScrollView(
@@ -231,13 +290,14 @@ class ChatScreen(Screen):
 
         # Welcome message
         self._add_row(
-            "Hi! I'm your offline assistant.\n"
-            "Add documents in the [b]Docs[/b] tab, then ask me anything.",
+            "Hi! I'm your offline assistant.\n\n"
+            "• [b]RAG mode[/b] — answers based on your uploaded documents.\n"
+            "• [b]Chat mode[/b] — free conversation with the AI, no documents needed.\n\n"
+            "Switch modes with the buttons in the header.",
             role="assistant",
         )
 
         # ── Input bar ─────────────────────────────────────────────── #
-        # Outer container gives the bottom-bar its dark background
         outer = BoxLayout(
             size_hint=(1, None), height=dp(68),
             padding=[dp(12), dp(8), dp(12), dp(8)],
@@ -245,10 +305,9 @@ class ChatScreen(Screen):
         )
         _paint_bg(outer, _HEADER_BG)
 
-        # Rounded text field container
         field_wrap = BoxLayout(
             size_hint=(1, 1),
-            padding=[dp(14), dp(6), dp(50), dp(6)],  # leave room for send btn
+            padding=[dp(14), dp(6), dp(50), dp(6)],
         )
         _paint_bg(field_wrap, _INPUT_BG, radius=22)
 
@@ -259,14 +318,13 @@ class ChatScreen(Screen):
             font_size        = sp(14),
             foreground_color = _TEXT_WHITE,
             hint_text_color  = _TEXT_MUTED,
-            background_color = (0, 0, 0, 0),   # transparent — field_wrap draws bg
+            background_color = (0, 0, 0, 0),
             cursor_color     = _TEXT_WHITE,
             padding          = [0, dp(4)],
         )
         self._input.bind(on_text_validate=self._on_send)
         field_wrap.add_widget(self._input)
 
-        # Floating send button (arrow ↑) overlaid on the right
         send_anchor = AnchorLayout(
             size_hint=(None, 1), width=dp(56),
             anchor_x="center", anchor_y="center",
@@ -281,7 +339,6 @@ class ChatScreen(Screen):
             background_color = _SEND_BG,
             color            = _TEXT_WHITE,
         )
-        # round button via canvas
         with send_btn.canvas.before:
             Color(*_SEND_BG)
             self._send_rect = RoundedRectangle(radius=[dp(18)])
@@ -297,6 +354,39 @@ class ChatScreen(Screen):
         root.add_widget(outer)
 
         self.add_widget(root)
+
+    # ── mode switching ────────────────────────────────────────────── #
+
+    def _set_mode(self, mode: str):
+        """Toggle between 'rag' and 'chat' modes."""
+        if self._mode == mode:
+            return
+        self._mode = mode
+        is_rag = (mode == "rag")
+
+        # Update pill appearance
+        for pill, active in ((self._rag_pill, is_rag), (self._chat_pill, not is_rag)):
+            color = _PILL_ACTIVE if active else _PILL_INACTIVE
+            pill._pill_color.rgba = color
+            pill.color = _TEXT_WHITE if active else _TEXT_MUTED
+            pill.bold  = active
+
+        # Update subtitle
+        if is_rag:
+            self._mode_lbl.text = "Mode: [b]RAG[/b] — answers from your documents"
+            self._input.hint_text = "Ask about your documents…"
+        else:
+            self._mode_lbl.text = "Mode: [b]Chat[/b] — free conversation with the AI"
+            self._input.hint_text = "Message the AI…"
+            self._history = []   # fresh conversation history per-session
+
+        # Show a brief mode-switch notification in the chat
+        notice = (
+            "Switched to [b]RAG mode[/b]. I'll answer from your documents."
+            if is_rag else
+            "Switched to [b]Chat mode[/b]. Ask me anything!"
+        )
+        self._add_row(notice, role="assistant")
 
     # ── helpers ───────────────────────────────────────────────────── #
 
@@ -327,16 +417,26 @@ class ChatScreen(Screen):
         if not question:
             return
         self._input.text = ""
+        self._pending_q = question
         self._add_row(question, role="user")
         self._show_typing()
 
-        from src.rag.pipeline import ask
-        ask(
-            question,
-            top_k=4,
-            stream_cb=self._on_token,
-            on_done=self._on_done,
-        )
+        if self._mode == "rag":
+            from src.rag.pipeline import ask
+            ask(
+                question,
+                top_k=4,
+                stream_cb=self._on_token,
+                on_done=self._on_done,
+            )
+        else:
+            from src.rag.pipeline import chat_direct
+            chat_direct(
+                question,
+                history=list(self._history),
+                stream_cb=self._on_token,
+                on_done=self._on_done,
+            )
 
     @mainthread
     def _on_token(self, token: str):
@@ -350,9 +450,20 @@ class ChatScreen(Screen):
     @mainthread
     def _on_done(self, success: bool, message: str):
         self._hide_typing()
-        if not success:
+        if success:
+            # Store history for Chat mode multi-turn
+            if self._mode == "chat" and self._pending_q:
+                answer_text = ""
+                if self._current_row:
+                    answer_text = self._current_row._label.text
+                self._history.append((self._pending_q, answer_text or message))
+                # Keep only last 10 turns
+                if len(self._history) > 10:
+                    self._history = self._history[-10:]
+        else:
             if self._current_row:
                 self._current_row._label.text = f"[color=ff5555]{message}[/color]"
             else:
                 self._add_row(message, role="system")
+        self._pending_q = ""
         self._current_row = None

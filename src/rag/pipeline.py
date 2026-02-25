@@ -13,7 +13,7 @@ from .db       import init_db, insert_document, update_doc_chunk_count
 from .chunker  import process_document
 from .db       import insert_chunks
 from .retriever import HybridRetriever
-from .llm      import llm, build_rag_prompt, list_available_models
+from .llm      import llm, build_rag_prompt, build_direct_prompt, list_available_models
 from .downloader import auto_download_default, model_dest_path, DEFAULT_MODEL
 
 
@@ -133,6 +133,36 @@ def is_model_loaded() -> bool:
 # ------------------------------------------------------------------ #
 #  Query                                                               #
 # ------------------------------------------------------------------ #
+
+def chat_direct(
+    question: str,
+    history: list | None = None,
+    stream_cb: Optional[Callable[[str], None]] = None,
+    on_done: Optional[Callable[[bool, str], None]] = None,
+) -> None:
+    """
+    Chat directly with the LLM — no document retrieval.
+    history: list of (user_text, assistant_text) tuples for multi-turn context.
+    """
+    def _run():
+        try:
+            if not llm.is_loaded():
+                if on_done:
+                    on_done(False, "No LLM model loaded. Please load a GGUF model first.")
+                return
+
+            prompt = build_direct_prompt(question, history)
+            answer = llm.generate(prompt, stream_cb=stream_cb)
+            answer = answer.strip()
+            if on_done:
+                on_done(True, answer)
+
+        except Exception as e:
+            if on_done:
+                on_done(False, f"Error during inference: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
 
 def ask(
     question: str,
