@@ -131,7 +131,93 @@ jobs:
           # Exit with buildozer exit code (not tee's)
           exit ${PIPESTATUS[0]}
 
-      # ── 9. Upload APK as artifact ─────────────────────────────────── #
+      # ── 9. Bundle GGUF model into APK (post-process, bypass Gradle) ── #
+      - name: Bundle GGUF model into APK
+        run: |
+          set -e
+
+          # --- 9a. Download the Q4 model (~806 MB, smaller than Q5) ---
+          pip install huggingface-hub --quiet
+          python3 - <<'PYEOF'
+          import os, sys
+          from huggingface_hub import hf_hub_download
+          path = hf_hub_download(
+              repo_id  = "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
+              filename = "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q4_K_M.gguf",
+              local_dir= "model_tmp",
+              local_dir_use_symlinks=False,
+          )
+          size_mb = os.path.getsize(path) // 1_048_576
+          print(f"Downloaded: {path}  ({size_mb} MB)")
+          PYEOF
+
+          # --- 9b. Patch the APK: strip old signature, add model as ZIP_STORED ---
+          python3 - <<'PYEOF'
+          import zipfile, glob, os, shutil
+
+          apk_path   = glob.glob("bin/*.apk")[0]
+          model_path = glob.glob("model_tmp/*.gguf")[0]
+          tmp_path   = apk_path + ".patching.tmp"
+
+          print(f"Patching {apk_path}  ({os.path.getsize(apk_path)//1_048_576} MB)")
+          print(f"Adding model {model_path}  ({os.path.getsize(model_path)//1_048_576} MB)")
+
+          # Re-pack APK without META-INF (signature), then add model uncompressed
+          with zipfile.ZipFile(apk_path, "r") as src, \
+               zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as dst:
+
+              # Copy all existing entries except the JAR signature
+              for item in src.infolist():
+                  if item.filename.startswith("META-INF/"):
+                      continue
+                  data = src.read(item.filename)
+                  dst.writestr(item, data)
+
+              # Add the GGUF as a stored (uncompressed) entry — chunked, memory-efficient
+              print("Adding model entry (ZIP_STORED — no compression)…")
+              info = zipfile.ZipInfo("assets/models/model.gguf")
+              info.compress_type = zipfile.ZIP_STORED
+              CHUNK = 4 * 1024 * 1024   # 4 MB
+              written = 0
+              with open(model_path, "rb") as mf, dst.open(info, "w") as zout:
+                  while True:
+                      chunk = mf.read(CHUNK)
+                      if not chunk:
+                          break
+                      zout.write(chunk)
+                      written += len(chunk)
+                      print(f"  {written // 1_048_576} MB written…", flush=True)
+
+          os.replace(tmp_path, apk_path)
+          print(f"Done.  New APK size: {os.path.getsize(apk_path)//1_048_576} MB")
+          PYEOF
+
+          # --- 9c. Create a debug signing keystore ---
+          mkdir -p ~/.android
+          keytool -genkey -v \
+            -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -noprompt 2>/dev/null || true
+
+          # --- 9d. Re-sign with apksigner from Android build-tools ---
+          APKSIGNER=$(find $HOME/.buildozer/android/platform/android-sdk/build-tools \
+            -name "apksigner" -type f 2>/dev/null | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+
+          APK=$(find bin -name "*.apk" | head -1)
+          "$APKSIGNER" sign \
+            --ks ~/.android/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            "$APK"
+
+          echo "=== Final bundled APK ==="
+          ls -lh bin/*.apk
+
+      # ── 10. Upload APK as artifact ─────────────────────────────────── #
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -140,7 +226,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # ── 9. Upload build log if anything fails ─────────────── #
+      # ── 10. Upload build log if anything fails ─────────────── #
       - name: Upload build log (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
@@ -148,3 +234,4 @@ jobs:
           name: build-log
           path: build.log
           retention-days: 7
+

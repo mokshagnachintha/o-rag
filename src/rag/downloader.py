@@ -227,28 +227,129 @@ def download_model(
     threading.Thread(target=_run, daemon=True).start()
 
 
+def extract_from_apk_asset(
+    asset_name:  str = "models/model.gguf",
+    on_progress: Optional[Callable[[float, str], None]] = None,
+    on_done:     Optional[Callable[[bool, str], None]]  = None,
+) -> None:
+    """
+    Android-only: copy the GGUF model from the APK's assets/ directory to
+    writable private storage ($ANDROID_PRIVATE/models/).
+
+    The model is stored as a ZIP_STORED (uncompressed) entry in the APK, so
+    Android's AssetManager can open it via a file descriptor.  We copy it in
+    1 MB chunks and report progress so the UI can show a progress bar.
+
+    Falls back gracefully to on_done(False, ...) if:
+      • Not running on Android
+      • Asset not found in APK (will trigger HF download fallback)
+    """
+    dest = model_dest_path(DEFAULT_MODEL["filename"])
+
+    def _run():
+        try:
+            from android import mActivity  # type: ignore
+        except ImportError:
+            if on_done:
+                on_done(False, "Not on Android — skipping asset extraction.")
+            return
+
+        try:
+            am     = mActivity.getAssets()
+
+            # Get declared file size for progress reporting
+            try:
+                afd   = am.openFd(asset_name)
+                total = int(afd.getDeclaredLength())
+                afd.close()
+            except Exception:
+                total = DEFAULT_MODEL["size_mb"] * 1_048_576
+
+            stream = am.open(asset_name)
+
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+            copied = 0
+            chunk  = 1024 * 512   # 512 KB
+            buf    = bytearray(chunk)
+
+            if on_progress:
+                on_progress(0.0, "Extracting bundled model…")
+
+            with open(dest, "wb") as f:
+                while True:
+                    n = stream.read(buf)
+                    if n == -1:
+                        break
+                    f.write(buf[:n])
+                    copied += n
+                    if on_progress and total > 0:
+                        frac   = min(copied / total, 0.99)
+                        mb_d   = copied // 1_048_576
+                        mb_t   = total  // 1_048_576
+                        on_progress(frac, f"Extracting model… {mb_d} / {mb_t} MB")
+
+            stream.close()
+
+            if on_progress:
+                on_progress(1.0, "Extraction complete.")
+            if on_done:
+                on_done(True, dest)
+
+        except Exception as e:
+            # Asset not present in APK → will fall back to HF download
+            if on_done:
+                on_done(False, str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def auto_download_default(
     on_progress: Optional[Callable[[float, str], None]] = None,
     on_done:     Optional[Callable[[bool, str], None]]  = None,
 ) -> None:
     """
-    Locate or download the default model.  Priority order:
-      1. Already present in models/ dir (from a previous run)
-      2. Bundled inside the APK (present in app directory after install)
-      3. Download from Hugging Face Hub
+    Locate or prepare the default model.  Priority order:
+      1. Already present in models/ dir (previous run)
+      2. Bundled inside the APK as assets/models/model.gguf  (Android)
+         → copy to writable storage on first launch
+      3. Bundled in the project directory (desktop dev)
+      4. Download from Hugging Face Hub
     """
     filename = DEFAULT_MODEL["filename"]
     dest     = model_dest_path(filename)
 
-    # 1. Already in models/ dir
-    if os.path.isfile(dest):
+    # 1. Already on disk — load immediately
+    if os.path.isfile(dest) and os.path.getsize(dest) > 50 * 1024 * 1024:
         if on_progress:
             on_progress(1.0, "Model ready.")
         if on_done:
             on_done(True, dest)
         return
 
-    # 2. Bundled with the APK — use it in place, no copy needed
+    # 2. Extract from APK asset (Android only)
+    if os.environ.get("ANDROID_PRIVATE"):
+        def _after_extract(ok, path_or_err):
+            if ok:
+                if on_done:
+                    on_done(True, path_or_err)
+            else:
+                # APK asset not found → fall back to HF download
+                download_model(
+                    repo_id     = DEFAULT_MODEL["repo_id"],
+                    filename    = DEFAULT_MODEL["filename"],
+                    on_progress = on_progress,
+                    on_done     = on_done,
+                )
+
+        extract_from_apk_asset(
+            asset_name  = "models/model.gguf",
+            on_progress = on_progress,
+            on_done     = _after_extract,
+        )
+        return
+
+    # 3. Bundled with the project — use in place (desktop dev)
     bundled = _bundled_model_path(filename)
     if bundled and bundled != dest:
         if on_progress:
@@ -257,7 +358,7 @@ def auto_download_default(
             on_done(True, bundled)
         return
 
-    # 3. Fall back to downloading from Hugging Face
+    # 4. Download from Hugging Face
     download_model(
         repo_id     = DEFAULT_MODEL["repo_id"],
         filename    = DEFAULT_MODEL["filename"],

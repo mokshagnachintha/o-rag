@@ -1,41 +1,58 @@
 """
-chat_screen.py — ChatGPT-style chat interface with streaming token output.
+chat_screen.py — Unified single-screen chat + document interface.
+
+Design:
+  • Header: "Offline RAG" title only — no tabs or mode toggles.
+  • Chat area inheriting ChatGPT dark style.
+  • Bottom bar: [+] attach  |  [text input pill]  |  [↑ send]
+  • Tap + to pick a PDF/TXT via the native file browser.
+    - Document ingestion progress shown inline as a status card.
+    - Once any doc is loaded the AI auto-answers from it (RAG mode).
+    - With no docs, the AI just chats freely (direct mode).
+  • Model loading / extraction progress shown in the welcome message.
 """
 from __future__ import annotations
 
 from kivy.uix.screenmanager import Screen
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.anchorlayout import AnchorLayout
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.label import Label
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
-from kivy.uix.widget import Widget
-from kivy.clock import Clock, mainthread
-from kivy.metrics import dp, sp
-from kivy.graphics import Color, RoundedRectangle, Rectangle
+from kivy.uix.boxlayout     import BoxLayout
+from kivy.uix.anchorlayout  import AnchorLayout
+from kivy.uix.scrollview    import ScrollView
+from kivy.uix.label         import Label
+from kivy.uix.textinput     import TextInput
+from kivy.uix.button        import Button
+from kivy.uix.widget        import Widget
+from kivy.uix.progressbar   import ProgressBar
+from kivy.clock             import Clock, mainthread
+from kivy.metrics           import dp, sp
+from kivy.graphics          import Color, RoundedRectangle, Rectangle
 
-# ── Palette (ChatGPT dark theme) ─────────────────────────────────── #
-_BG          = (0.129, 0.129, 0.129, 1)   # #212121  page background
-_HEADER_BG   = (0.102, 0.102, 0.102, 1)   # #1a1a1a  header
-_USER_BG     = (0.184, 0.184, 0.184, 1)   # #2f2f2f  user bubble
-_INPUT_BG    = (0.231, 0.231, 0.231, 1)   # #3b3b3b  input field
-_SEND_BG     = (0.098, 0.761, 0.490, 1)   # #19c37d  send button (ChatGPT green)
-_TEXT_WHITE  = (1, 1, 1, 1)
-_TEXT_MUTED  = (0.60, 0.60, 0.63, 1)
-_DIVIDER     = (0.22, 0.22, 0.22, 1)
+# ── Palette ───────────────────────────────────────────────────────── #
+_BG        = (0.102, 0.102, 0.102, 1)   # #1a1a1a  page background
+_HDR_BG    = (0.078, 0.078, 0.078, 1)   # #141414  header strip
+_USER_BG   = (0.184, 0.184, 0.184, 1)   # #2f2f2f  user bubble
+_INPUT_BG  = (0.173, 0.173, 0.173, 1)   # #2c2c2c  text-input wrap
+_GREEN     = (0.098, 0.761, 0.490, 1)   # #19c37d  ChatGPT green
+_ADD_BG    = (0.220, 0.220, 0.220, 1)   # #383838  + button
+_WHITE     = (1,    1,    1,    1)
+_MUTED     = (0.55, 0.55, 0.58, 1)
+_DIVIDER   = (0.20, 0.20, 0.20, 1)
+_DOC_CARD  = (0.12, 0.22, 0.17, 1)      # dark teal for doc status card
 
 
-def _paint_bg(widget, color, radius=0):
-    """Draw a solid color background on canvas.before."""
+# ------------------------------------------------------------------ #
+#  Helpers                                                             #
+# ------------------------------------------------------------------ #
+
+def _paint(widget, color, radius: float = 0):
+    """Bind a solid colour background to a widget's canvas.before."""
     with widget.canvas.before:
         Color(*color)
-        rect = RoundedRectangle(radius=[dp(radius)]) if radius else Rectangle()
-    def _upd(*_):
-        rect.pos  = widget.pos
-        rect.size = widget.size
-    widget.bind(pos=_upd, size=_upd)
-    return rect
+        r = (RoundedRectangle(radius=[dp(radius)]) if radius else Rectangle())
+    widget.bind(
+        pos =lambda w, _: setattr(r, "pos",  w.pos),
+        size=lambda w, _: setattr(r, "size", w.size),
+    )
+    return r
 
 
 # ------------------------------------------------------------------ #
@@ -43,21 +60,20 @@ def _paint_bg(widget, color, radius=0):
 # ------------------------------------------------------------------ #
 
 class _Avatar(Widget):
-    _COLORS = {
-        "user":      (0.400, 0.400, 0.900, 1),
-        "assistant": (0.098, 0.761, 0.490, 1),
-        "system":    (0.800, 0.200, 0.200, 1),
+    _COLS = {
+        "user":      (0.40, 0.40, 0.90, 1),
+        "assistant": _GREEN,
+        "system":    (0.80, 0.20, 0.20, 1),
     }
+
     def __init__(self, role: str, **kw):
-        super().__init__(size_hint=(None, None),
-                         size=(dp(32), dp(32)), **kw)
+        super().__init__(size_hint=(None, None), size=(dp(32), dp(32)), **kw)
         letter = {"user": "U", "assistant": "AI", "system": "!"}.get(role, "?")
         with self.canvas:
-            Color(*self._COLORS.get(role, (0.5, 0.5, 0.5, 1)))
+            Color(*self._COLS.get(role, (0.5, 0.5, 0.5, 1)))
             self._circ = RoundedRectangle(radius=[dp(16)])
         self.bind(pos=self._upd, size=self._upd)
-        self._lbl = Label(text=letter, font_size=sp(11), bold=True,
-                          color=(1, 1, 1, 1))
+        self._lbl = Label(text=letter, font_size=sp(11), bold=True, color=_WHITE)
         self.add_widget(self._lbl)
 
     def _upd(self, *_):
@@ -67,15 +83,10 @@ class _Avatar(Widget):
 
 
 # ------------------------------------------------------------------ #
-#  Message row                                                         #
+#  Message row (user bubble right / assistant text left)              #
 # ------------------------------------------------------------------ #
 
 class MessageRow(BoxLayout):
-    """
-    One full-width row containing avatar + text, matching ChatGPT layout:
-      - user:      right-aligned bubble, grey background
-      - assistant: left-aligned, no bubble, just text on page bg
-    """
     def __init__(self, text: str, role: str = "assistant", **kw):
         super().__init__(
             orientation="horizontal",
@@ -85,70 +96,120 @@ class MessageRow(BoxLayout):
             **kw,
         )
         self.role = role
-
-        self._label = Label(
-            text        = text,
-            markup      = True,
-            size_hint_y = None,
-            text_size   = (None, None),
-            halign      = "left",
-            valign      = "top",
-            color       = _TEXT_WHITE,
-            font_size   = sp(14.5),
+        self._lbl = Label(
+            text=text, markup=True,
+            size_hint_y=None, text_size=(None, None),
+            halign="left", valign="top",
+            color=_WHITE, font_size=sp(14.5),
         )
-        self._label.bind(texture_size=self._on_texture)
-        self.bind(width=self._on_width)
+        self._lbl.bind(texture_size=self._on_tex)
+        self.bind(width=self._on_w)
+        _paint(self, _BG)
 
         if role == "user":
             self._build_user()
         else:
-            self._build_assistant()
+            self._build_asst()
 
-        _paint_bg(self, _BG if role == "assistant" else _BG)
-
-    # -- user row: spacer | bubble(text) | avatar --
     def _build_user(self):
-        self.add_widget(Widget(size_hint_x=1))          # push right
-        bubble = BoxLayout(
-            orientation="vertical",
-            size_hint=(None, None),
-            padding=[dp(12), dp(10)],
-        )
-        _paint_bg(bubble, _USER_BG, radius=18)
-        bubble.add_widget(self._label)
-        self._bubble = bubble
-        self.add_widget(bubble)
+        self.add_widget(Widget(size_hint_x=1))           # push right
+        bub = BoxLayout(size_hint=(None, None), padding=[dp(12), dp(10)])
+        _paint(bub, _USER_BG, radius=18)
+        bub.add_widget(self._lbl)
+        self._bub = bub
+        self.add_widget(bub)
         self.add_widget(_Avatar("user"))
 
-    # -- assistant row: avatar | text --
-    def _build_assistant(self):
+    def _build_asst(self):
         self.add_widget(_Avatar("assistant"))
-        self.add_widget(self._label)
+        self.add_widget(self._lbl)
 
-    def _on_texture(self, lbl, tex_size):
-        lbl.height     = tex_size[1] + dp(4)
-        lbl.text_size  = (lbl.width or 1, None)
-        # bubble must also grow
-        if self.role == "user" and hasattr(self, "_bubble"):
-            self._bubble.width  = min(lbl.texture_size[0] + dp(28),
-                                      self.width * 0.80)
-            self._bubble.height = lbl.height + dp(20)
+    def _on_tex(self, lbl, ts):
+        lbl.height    = ts[1] + dp(4)
+        lbl.text_size = (lbl.width or 1, None)
+        if self.role == "user" and hasattr(self, "_bub"):
+            self._bub.width  = min(ts[0] + dp(28), self.width * 0.82)
+            self._bub.height = lbl.height + dp(20)
         self.height = max(lbl.height + dp(20), dp(52))
 
-    def _on_width(self, *_):
-        avail = self.width - dp(72)          # minus avatar + padding
+    def _on_w(self, *_):
+        avail = self.width - dp(72)
         if self.role == "user":
-            max_w = avail * 0.82
-            self._label.text_size = (max_w, None)
+            self._lbl.text_size = (avail * 0.82, None)
         else:
-            self._label.text_size = (avail, None)
+            self._lbl.text_size = (avail, None)
 
     def append(self, token: str):
-        self._label.text += token
+        self._lbl.text += token
 
 
 # ------------------------------------------------------------------ #
-#  Typing indicator ("● ● ●" animated)                                #
+#  Document ingestion status card                                      #
+# ------------------------------------------------------------------ #
+
+class DocStatusCard(BoxLayout):
+    """
+    Inline card that shows file name + progress indicator while a
+    document is being chunked and indexed.
+    """
+    def __init__(self, filename: str, **kw):
+        super().__init__(
+            orientation="vertical",
+            size_hint=(1, None),
+            padding=[dp(14), dp(8), dp(14), dp(8)],
+            spacing=dp(4),
+            **kw,
+        )
+        _paint(self, _BG)
+
+        inner = BoxLayout(
+            orientation="vertical",
+            size_hint=(1, None),
+            padding=[dp(14), dp(12)],
+            spacing=dp(6),
+        )
+        _paint(inner, _DOC_CARD, radius=14)
+
+        self._title = Label(
+            text=f"[b]📄  {filename}[/b]",
+            markup=True,
+            color=_WHITE, font_size=sp(13),
+            size_hint_y=None, height=dp(22),
+            halign="left", valign="middle",
+        )
+        self._title.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+
+        self._status = Label(
+            text="Indexing…",
+            color=_GREEN, font_size=sp(12),
+            size_hint_y=None, height=dp(18),
+            halign="left", valign="middle",
+        )
+        self._status.bind(size=lambda w, _: setattr(w, "text_size", (w.width, None)))
+
+        self._bar = ProgressBar(
+            max=100, value=10,
+            size_hint=(1, None), height=dp(5),
+        )
+
+        inner.add_widget(self._title)
+        inner.add_widget(self._status)
+        inner.add_widget(self._bar)
+        inner.bind(minimum_height=inner.setter("height"))
+
+        self.add_widget(inner)
+        self.bind(minimum_height=self.setter("height"))
+
+    def set_done(self, success: bool, message: str):
+        self._bar.value = 100 if success else 0
+        col  = "00cc66" if success else "ff5555"
+        icon = "✅" if success else "❌"
+        self._status.text   = f"[color={col}]{icon}  {message}[/color]"
+        self._status.markup = True
+
+
+# ------------------------------------------------------------------ #
+#  Typing indicator  ● ● ●                                            #
 # ------------------------------------------------------------------ #
 
 class _TypingIndicator(BoxLayout):
@@ -159,290 +220,304 @@ class _TypingIndicator(BoxLayout):
             padding=[dp(56), dp(4)], spacing=dp(6),
             **kw,
         )
-        self._dots = []
+        self._dots: list[Label] = []
         for _ in range(3):
-            lbl = Label(text="●", font_size=sp(10), color=_TEXT_MUTED,
-                        size_hint=(None, None), size=(dp(14), dp(14)))
-            self._dots.append(lbl)
-            self.add_widget(lbl)
+            d = Label(
+                text="●", font_size=sp(10), color=_MUTED,
+                size_hint=(None, None), size=(dp(14), dp(14)),
+            )
+            self._dots.append(d)
+            self.add_widget(d)
         self._tick = 0
-        Clock.schedule_interval(self._animate, 0.45)
+        Clock.schedule_interval(self._anim, 0.42)
 
-    def _animate(self, *_):
+    def _anim(self, *_):
         for i, d in enumerate(self._dots):
-            d.color = _TEXT_WHITE if i == self._tick % 3 else _TEXT_MUTED
+            d.color = _WHITE if i == self._tick % 3 else _MUTED
         self._tick += 1
 
     def stop(self):
-        Clock.unschedule(self._animate)
+        Clock.unschedule(self._anim)
 
 
-# ── Mode-pill colours ─────────────────────────────────────────────── #
-_PILL_ACTIVE   = _SEND_BG                          # green
-_PILL_INACTIVE = (0.22, 0.22, 0.22, 1)            # dark grey
-
-
-def _mode_pill(text: str, active: bool) -> Button:
-    """Small rounded pill toggle button for RAG / Chat header."""
-    btn = Button(
-        text             = text,
-        size_hint        = (None, None),
-        size             = (dp(72), dp(30)),
-        font_size        = sp(12),
-        bold             = active,
-        background_normal= "",
-        background_color = (0, 0, 0, 0),
-        color            = _TEXT_WHITE if active else _TEXT_MUTED,
-    )
-    color = _PILL_ACTIVE if active else _PILL_INACTIVE
-    with btn.canvas.before:
-        c = Color(*color)
-        r = RoundedRectangle(radius=[dp(15)])
-    btn.bind(
-        pos =lambda w, _: setattr(r, "pos",  w.pos),
-        size=lambda w, _: setattr(r, "size", w.size),
-    )
-    btn._pill_color = c
-    btn._pill_rect  = r
-    return btn
-
-
-# ------------------------------------------------------------------ #
-#  Chat Screen                                                         #
-# ------------------------------------------------------------------ #
+# ================================================================== #
+#  ChatScreen                                                         #
+# ================================================================== #
 
 class ChatScreen(Screen):
+    """
+    Single-screen UI.  No tab bar.
+    Internal mode tracked automatically:
+      _has_docs=True  →  RAG (answer from indexed document chunks)
+      _has_docs=False →  direct LLM chat with rolling history
+    """
+
     def __init__(self, **kw):
         super().__init__(**kw)
-        self._mode: str = "rag"          # "rag" | "chat"
-        self._history: list = []          # [(user_text, assistant_text), ...]
-        self._pending_q: str = ""         # user message waiting for answer
-        self._current_row: MessageRow | None = None
-        self._typing_indicator: _TypingIndicator | None = None
+        self._history:     list                   = []
+        self._pending_q:   str                    = ""
+        self._current_row: MessageRow | None      = None
+        self._typing:      _TypingIndicator | None = None
+        self._has_docs:    bool                   = False
         self._build_ui()
 
-    # ── layout ────────────────────────────────────────────────────── #
+    # ---------------------------------------------------------------- #
+    #  Layout                                                           #
+    # ---------------------------------------------------------------- #
 
     def _build_ui(self):
         root = BoxLayout(orientation="vertical")
-        _paint_bg(root, _BG)
+        _paint(root, _BG)
 
-        # ── Header ────────────────────────────────────────────────── #
-        header = BoxLayout(
+        # ── Header ──────────────────────────────────────────────────── #
+        hdr = BoxLayout(
             size_hint=(1, None), height=dp(54),
-            padding=[dp(12), dp(8)],
-            spacing=dp(8),
+            padding=[dp(16), dp(0)],
         )
-        _paint_bg(header, _HEADER_BG)
-
-        # App title (left)
-        header.add_widget(Label(
+        _paint(hdr, _HDR_BG)
+        hdr.add_widget(Label(
             text="[b]Offline RAG[/b]", markup=True,
-            color=_TEXT_WHITE, font_size=sp(15),
-            size_hint=(1, 1),
-            halign="left", valign="middle",
+            color=_WHITE, font_size=sp(16),
+            halign="center", valign="middle",
         ))
+        root.add_widget(hdr)
 
-        # Mode toggle pills (right side of header)
-        self._rag_pill  = _mode_pill("📄 RAG",  active=True)
-        self._chat_pill = _mode_pill("💬 Chat", active=False)
-        self._rag_pill.bind( on_release=lambda *_: self._set_mode("rag"))
-        self._chat_pill.bind(on_release=lambda *_: self._set_mode("chat"))
-        header.add_widget(self._rag_pill)
-        header.add_widget(self._chat_pill)
-
-        root.add_widget(header)
-
-        # thin separator line
         sep = Widget(size_hint=(1, None), height=dp(1))
-        _paint_bg(sep, _DIVIDER)
+        _paint(sep, _DIVIDER)
         root.add_widget(sep)
 
-        # ── Mode subtitle bar ─────────────────────────────────────── #
-        self._mode_bar = BoxLayout(size_hint=(1, None), height=dp(26),
-                                   padding=[dp(14), 0])
-        _paint_bg(self._mode_bar, _BG)
-        self._mode_lbl = Label(
-            text="Mode: [b]RAG[/b] — answers from your documents",
-            markup=True, font_size=sp(11),
-            color=_TEXT_MUTED, halign="left", valign="middle",
-        )
-        self._mode_bar.add_widget(self._mode_lbl)
-        root.add_widget(self._mode_bar)
-
-        # ── Message list ──────────────────────────────────────────── #
+        # ── Message list ─────────────────────────────────────────────── #
         self._scroll = ScrollView(
-            size_hint=(1, 1),
-            do_scroll_x=False,
-            bar_width=dp(3),
-            scroll_type=["bars", "content"],
+            size_hint=(1, 1), do_scroll_x=False, bar_width=dp(3),
         )
-        _paint_bg(self._scroll, _BG)
+        _paint(self._scroll, _BG)
 
-        self._msg_list = BoxLayout(
+        self._msgs = BoxLayout(
             orientation="vertical",
-            size_hint=(1, None),
-            spacing=0,
+            size_hint=(1, None), spacing=0,
         )
-        self._msg_list.bind(minimum_height=self._msg_list.setter("height"))
-        self._scroll.add_widget(self._msg_list)
+        self._msgs.bind(minimum_height=self._msgs.setter("height"))
+        self._scroll.add_widget(self._msgs)
         root.add_widget(self._scroll)
 
-        # Welcome message
-        self._add_row(
-            "Hi! I'm your offline assistant.\n\n"
-            "• [b]RAG mode[/b] — answers based on your uploaded documents.\n"
-            "• [b]Chat mode[/b] — free conversation with the AI, no documents needed.\n\n"
-            "Switch modes with the buttons in the header.",
+        # Welcome message — text updated when model is ready
+        self._welcome = self._add_msg(
+            "Hello! I'm your offline AI assistant.\n\n"
+            "⏳  [b]Preparing model…[/b] This may take a moment on first launch.",
             role="assistant",
         )
 
-        # ── Input bar ─────────────────────────────────────────────── #
-        outer = BoxLayout(
-            size_hint=(1, None), height=dp(68),
-            padding=[dp(12), dp(8), dp(12), dp(8)],
+        # ── Input bar ───────────────────────────────────────────────── #
+        bar = BoxLayout(
+            size_hint=(1, None), height=dp(70),
+            padding=[dp(10), dp(10), dp(10), dp(10)],
             spacing=dp(8),
         )
-        _paint_bg(outer, _HEADER_BG)
+        _paint(bar, _HDR_BG)
 
-        field_wrap = BoxLayout(
-            size_hint=(1, 1),
-            padding=[dp(14), dp(6), dp(50), dp(6)],
+        # [+] attach button
+        add_btn = Button(
+            text="＋",
+            font_size=sp(22), bold=True,
+            size_hint=(None, None), size=(dp(44), dp(44)),
+            background_normal="", background_color=(0, 0, 0, 0),
+            color=_WHITE,
         )
-        _paint_bg(field_wrap, _INPUT_BG, radius=22)
+        _paint(add_btn, _ADD_BG, radius=22)
+        add_btn.bind(on_release=self._on_attach)
+        bar.add_widget(add_btn)
+
+        # Text input pill
+        pill = BoxLayout(
+            size_hint=(1, 1),
+            padding=[dp(14), dp(8), dp(52), dp(8)],
+        )
+        _paint(pill, _INPUT_BG, radius=22)
 
         self._input = TextInput(
-            hint_text        = "Message Offline RAG…",
-            multiline        = False,
-            size_hint        = (1, 1),
-            font_size        = sp(14),
-            foreground_color = _TEXT_WHITE,
-            hint_text_color  = _TEXT_MUTED,
-            background_color = (0, 0, 0, 0),
-            cursor_color     = _TEXT_WHITE,
-            padding          = [0, dp(4)],
+            hint_text="Message…",
+            multiline=False, size_hint=(1, 1),
+            font_size=sp(14.5),
+            foreground_color=_WHITE,
+            hint_text_color=_MUTED,
+            background_color=(0, 0, 0, 0),
+            cursor_color=_WHITE,
+            padding=[0, dp(4)],
         )
         self._input.bind(on_text_validate=self._on_send)
-        field_wrap.add_widget(self._input)
+        pill.add_widget(self._input)
 
-        send_anchor = AnchorLayout(
-            size_hint=(None, 1), width=dp(56),
+        # [↑] send button overlaid on pill right
+        send_anc = AnchorLayout(
+            size_hint=(None, 1), width=dp(52),
             anchor_x="center", anchor_y="center",
         )
         send_btn = Button(
-            text             = "↑",
-            size_hint        = (None, None),
-            size             = (dp(36), dp(36)),
-            font_size        = sp(18),
-            bold             = True,
-            background_normal= "",
-            background_color = _SEND_BG,
-            color            = _TEXT_WHITE,
+            text="↑", font_size=sp(18), bold=True,
+            size_hint=(None, None), size=(dp(34), dp(34)),
+            background_normal="", background_color=(0, 0, 0, 0),
+            color=_WHITE,
         )
-        with send_btn.canvas.before:
-            Color(*_SEND_BG)
-            self._send_rect = RoundedRectangle(radius=[dp(18)])
-        send_btn.bind(
-            pos =lambda w, _: setattr(self._send_rect, "pos",  w.pos),
-            size=lambda w, _: setattr(self._send_rect, "size", w.size),
-        )
+        _paint(send_btn, _GREEN, radius=17)
         send_btn.bind(on_release=self._on_send)
-        send_anchor.add_widget(send_btn)
+        send_anc.add_widget(send_btn)
 
-        outer.add_widget(field_wrap)
-        outer.add_widget(send_anchor)
-        root.add_widget(outer)
+        bar.add_widget(pill)
+        bar.add_widget(send_anc)
+        root.add_widget(bar)
 
         self.add_widget(root)
 
-    # ── mode switching ────────────────────────────────────────────── #
+        # Register model-ready callbacks once pipeline is up
+        Clock.schedule_once(self._register_pipeline_callbacks, 0.8)
 
-    def _set_mode(self, mode: str):
-        """Toggle between 'rag' and 'chat' modes."""
-        if self._mode == mode:
-            return
-        self._mode = mode
-        is_rag = (mode == "rag")
+    # ---------------------------------------------------------------- #
+    #  Model progress / ready callbacks                                 #
+    # ---------------------------------------------------------------- #
 
-        # Update pill appearance
-        for pill, active in ((self._rag_pill, is_rag), (self._chat_pill, not is_rag)):
-            color = _PILL_ACTIVE if active else _PILL_INACTIVE
-            pill._pill_color.rgba = color
-            pill.color = _TEXT_WHITE if active else _TEXT_MUTED
-            pill.bold  = active
-
-        # Update subtitle
-        if is_rag:
-            self._mode_lbl.text = "Mode: [b]RAG[/b] — answers from your documents"
-            self._input.hint_text = "Ask about your documents…"
-        else:
-            self._mode_lbl.text = "Mode: [b]Chat[/b] — free conversation with the AI"
-            self._input.hint_text = "Message the AI…"
-            self._history = []   # fresh conversation history per-session
-
-        # Show a brief mode-switch notification in the chat
-        notice = (
-            "Switched to [b]RAG mode[/b]. I'll answer from your documents."
-            if is_rag else
-            "Switched to [b]Chat mode[/b]. Ask me anything!"
+    def _register_pipeline_callbacks(self, *_):
+        from src.rag.pipeline import register_auto_download_callbacks
+        register_auto_download_callbacks(
+            on_progress=self._on_model_progress,
+            on_done    =self._on_model_ready,
         )
-        self._add_row(notice, role="assistant")
 
-    # ── helpers ───────────────────────────────────────────────────── #
+    @mainthread
+    def _on_model_progress(self, frac: float, text: str):
+        pct     = int(frac * 100)
+        filled  = "█" * (pct // 10)
+        empty   = "░" * (10 - pct // 10)
+        self._welcome._lbl.text = (
+            f"⏳  [b]Preparing model…[/b]  {pct}%\n"
+            f"[size=11sp][color=888888]{filled}{empty}[/color][/size]\n"
+            f"{text}"
+        )
 
-    def _add_row(self, text: str, role: str) -> MessageRow:
-        row = MessageRow(text, role=role)
-        self._msg_list.add_widget(row)
-        Clock.schedule_once(lambda *_: self._scroll_down(), 0.05)
-        return row
+    @mainthread
+    def _on_model_ready(self, success: bool, message: str):
+        if success:
+            self._welcome._lbl.text = (
+                "✅  [b]Model ready![/b]\n\n"
+                "• Just type a message to chat with the AI.\n"
+                "• Tap [b]＋[/b] to attach a [b]PDF[/b] or [b]TXT[/b] — "
+                "I'll answer questions about its content."
+            )
+        else:
+            self._welcome._lbl.text = (
+                f"[color=ff5555]⚠  Model failed to load:[/color]\n{message}\n\n"
+                "Check your connection and restart the app."
+            )
 
-    def _scroll_down(self):
-        self._scroll.scroll_y = 0
+    # ---------------------------------------------------------------- #
+    #  Attach document via file picker                                  #
+    # ---------------------------------------------------------------- #
 
-    def _show_typing(self):
-        self._typing_indicator = _TypingIndicator()
-        self._msg_list.add_widget(self._typing_indicator)
-        Clock.schedule_once(lambda *_: self._scroll_down(), 0.05)
+    def _on_attach(self, *_):
+        try:
+            from plyer import filechooser
+            filechooser.open_file(
+                on_selection=self._on_file_chosen,
+                filters=[["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]],
+                title="Pick a document",
+                multiple=False,
+            )
+        except Exception:
+            self._add_msg(
+                "File picker unavailable on this device.\n"
+                "Type the [b]full path[/b] to your file and send it — "
+                "e.g. [i]/sdcard/Download/report.pdf[/i]",
+                role="assistant",
+            )
 
-    def _hide_typing(self):
-        if self._typing_indicator:
-            self._typing_indicator.stop()
-            self._msg_list.remove_widget(self._typing_indicator)
-            self._typing_indicator = None
+    def _on_file_chosen(self, selection):
+        if not selection:
+            return
+        import os
+        path  = selection[0]
+        fname = os.path.basename(path)
+        self._add_msg(f"📎  [b]{fname}[/b]", role="user")
+        self._start_ingest(path, fname)
 
-    # ── events ────────────────────────────────────────────────────── #
+    def _start_ingest(self, path: str, fname: str):
+        card = DocStatusCard(fname)
+        self._msgs.add_widget(card)
+        self._scroll_down()
+        from src.rag.pipeline import ingest_document
+        ingest_document(
+            path,
+            on_done=lambda ok, msg: self._ingest_done(card, ok, msg),
+        )
+
+    @mainthread
+    def _ingest_done(self, card: DocStatusCard, ok: bool, msg: str):
+        card.set_done(ok, msg)
+        if ok:
+            self._has_docs = True
+            self._add_msg(
+                "✅  Document indexed! Ask me anything about it.\n"
+                "[color=888888][size=12sp]"
+                "(Tap ＋ again to add more documents.)"
+                "[/size][/color]",
+                role="assistant",
+            )
+        else:
+            self._add_msg(
+                f"[color=ff5555]❌  Could not load document:[/color]\n{msg}",
+                role="assistant",
+            )
+        self._scroll_down()
+
+    # ---------------------------------------------------------------- #
+    #  Handle plain file-path typed into chat                           #
+    # ---------------------------------------------------------------- #
+
+    def _maybe_load_path(self, text: str) -> bool:
+        """If user pastes a file path, ingest it rather than chat with it."""
+        import os
+        s = text.strip()
+        is_path = (s.startswith("/") or (len(s) > 2 and s[1] == ":")) \
+                  and os.path.isfile(s)
+        if is_path:
+            fname = os.path.basename(s)
+            self._add_msg(f"📎  [b]{fname}[/b]", role="user")
+            self._start_ingest(s, fname)
+            return True
+        return False
+
+    # ---------------------------------------------------------------- #
+    #  Send / receive                                                   #
+    # ---------------------------------------------------------------- #
 
     def _on_send(self, *_):
-        question = self._input.text.strip()
-        if not question:
+        q = self._input.text.strip()
+        if not q:
             return
         self._input.text = ""
-        self._pending_q = question
-        self._add_row(question, role="user")
+
+        if self._maybe_load_path(q):
+            return
+
+        self._pending_q = q
+        self._add_msg(q, role="user")
         self._show_typing()
 
-        if self._mode == "rag":
+        if self._has_docs:
             from src.rag.pipeline import ask
-            ask(
-                question,
-                top_k=4,
-                stream_cb=self._on_token,
-                on_done=self._on_done,
-            )
+            ask(q, top_k=4, stream_cb=self._on_token, on_done=self._on_done)
         else:
             from src.rag.pipeline import chat_direct
             chat_direct(
-                question,
-                history=list(self._history),
+                q,
+                history  =list(self._history),
                 stream_cb=self._on_token,
-                on_done=self._on_done,
+                on_done  =self._on_done,
             )
 
     @mainthread
     def _on_token(self, token: str):
-        if self._typing_indicator:
+        if self._typing:
             self._hide_typing()
-            self._current_row = self._add_row("", role="assistant")
+            self._current_row = self._add_msg("", role="assistant")
         if self._current_row:
             self._current_row.append(token)
             Clock.schedule_once(lambda *_: self._scroll_down(), 0.02)
@@ -451,19 +526,41 @@ class ChatScreen(Screen):
     def _on_done(self, success: bool, message: str):
         self._hide_typing()
         if success:
-            # Store history for Chat mode multi-turn
-            if self._mode == "chat" and self._pending_q:
-                answer_text = ""
-                if self._current_row:
-                    answer_text = self._current_row._label.text
-                self._history.append((self._pending_q, answer_text or message))
-                # Keep only last 10 turns
+            if not self._has_docs and self._pending_q and self._current_row:
+                ans = self._current_row._lbl.text
+                self._history.append((self._pending_q, ans))
                 if len(self._history) > 10:
                     self._history = self._history[-10:]
         else:
             if self._current_row:
-                self._current_row._label.text = f"[color=ff5555]{message}[/color]"
+                self._current_row._lbl.text = (
+                    f"[color=ff5555]{message}[/color]"
+                )
             else:
-                self._add_row(message, role="system")
-        self._pending_q = ""
+                self._add_msg(message, role="assistant")
+        self._pending_q   = ""
         self._current_row = None
+
+    # ---------------------------------------------------------------- #
+    #  Helpers                                                          #
+    # ---------------------------------------------------------------- #
+
+    def _add_msg(self, text: str, role: str = "assistant") -> MessageRow:
+        row = MessageRow(text, role=role)
+        self._msgs.add_widget(row)
+        Clock.schedule_once(lambda *_: self._scroll_down(), 0.05)
+        return row
+
+    def _show_typing(self):
+        self._typing = _TypingIndicator()
+        self._msgs.add_widget(self._typing)
+        Clock.schedule_once(lambda *_: self._scroll_down(), 0.05)
+
+    def _hide_typing(self):
+        if self._typing:
+            self._typing.stop()
+            self._msgs.remove_widget(self._typing)
+            self._typing = None
+
+    def _scroll_down(self):
+        self._scroll.scroll_y = 0
