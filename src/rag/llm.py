@@ -363,6 +363,12 @@ class LlamaCppModel:
                 print("[LLM] Backend: llama-server (built-in)")
                 return
 
+            if os.environ.get("ANDROID_PRIVATE"):
+                raise RuntimeError(
+                    "No LLM backend available.\n\n"
+                    "The bundled llama-server binary could not be loaded.\n"
+                    "Please reinstall the app from the latest release."
+                )
             raise RuntimeError(
                 "No LLM backend available.\n\n"
                 "Options:\n"
