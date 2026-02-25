@@ -27,8 +27,8 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
-# App root: src/rag/llm.py → ../../..
-_APP_ROOT = Path(__file__).resolve().parent.parent.parent
+# App root: rag/llm.py → ../..
+_APP_ROOT = Path(__file__).resolve().parent.parent
 
 # ------------------------------------------------------------------ #
 #  Backend helpers                                                     #

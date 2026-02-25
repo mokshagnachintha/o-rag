@@ -32,7 +32,7 @@ This module provides two paths:
 
 Usage
 ─────
-    from quantize.quantizer import quantize_gguf, QUANT_TYPES
+    from quantization.quantizer import quantize_gguf, QUANT_TYPES
     quantize_gguf(
         src="models/gemma-3-4b-it-F16.gguf",
         dst="models/gemma-3-4b-it-Q4_K_M.gguf",
@@ -79,7 +79,7 @@ def estimate_output_size_mb(src_path: str, target_quant: str) -> float | None:
     Returns None if analysis fails.
     """
     try:
-        from quantize.model_analyzer import analyze_gguf
+        from quantization.model_analyzer import analyze_gguf
         info = analyze_gguf(src_path)
         params = info.get("total_params")
         bpw    = QUANT_TYPES.get(target_quant, {}).get("bpw")

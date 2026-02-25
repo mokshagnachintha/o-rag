@@ -8,7 +8,7 @@ source.dir    = .
 source.include_exts = py,png,jpg,kv,atlas,db
 # Include the pre-built ARM64 llama-server binary (no extension)
 source.include_patterns = llama-server-arm64
-source.exclude_dirs = __pycache__,.git,.venv,venv,.mypy_cache,quantize,llamacpp_bin,p4a-recipes
+source.exclude_dirs = __pycache__,.git,.venv,venv,.mypy_cache,quantization,bin,p4a-recipes
 
 version = 1.0.0
 

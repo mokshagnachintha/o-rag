@@ -141,11 +141,11 @@ class RAGCli:
         self.no_rag  = args.no_rag
 
         # Import RAG components (lazy, after path is set)
-        from src.rag.db       import init_db, list_documents, delete_document
-        from src.rag.chunker  import process_document
-        from src.rag.db       import insert_document, insert_chunks, update_doc_chunk_count
-        from src.rag.retriever import HybridRetriever
-        from src.rag.llm      import LlamaCppModel, build_rag_prompt
+        from rag.db       import init_db, list_documents, delete_document
+        from rag.chunker  import process_document
+        from rag.db       import insert_document, insert_chunks, update_doc_chunk_count
+        from rag.retriever import HybridRetriever
+        from rag.llm      import LlamaCppModel, build_rag_prompt
 
         self._init_db            = init_db
         self._list_docs          = list_documents
@@ -293,7 +293,7 @@ class RAGCli:
                 print()
         else:
             # Pure LLM mode (no context)
-            from src.rag.llm import build_rag_prompt
+            from rag.llm import build_rag_prompt
             prompt = (
                 f"<start_of_turn>user\n{question}<end_of_turn>\n"
                 f"<start_of_turn>model\n"
@@ -358,7 +358,7 @@ class RAGCli:
         print(green(f"  ✓ Document {doc_id} removed and index reloaded."))
 
     def _cmd_clear(self) -> None:
-        from src.rag.db import get_conn
+        from rag.db import get_conn
         with get_conn() as conn:
             conn.execute("DELETE FROM chunks")
             conn.execute("DELETE FROM documents")

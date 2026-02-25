@@ -482,7 +482,7 @@ class ChatScreen(Screen):
     # ---------------------------------------------------------------- #
 
     def _register_pipeline_callbacks(self, *_):
-        from src.rag.pipeline import register_auto_download_callbacks
+        from rag.pipeline import register_auto_download_callbacks
         register_auto_download_callbacks(
             on_progress=self._on_model_progress,
             on_done    =self._on_model_ready,
@@ -575,7 +575,7 @@ class ChatScreen(Screen):
         card = DocStatusCard(fname)
         self._msgs.add_widget(card)
         self._scroll_down()
-        from src.rag.pipeline import ingest_document
+        from rag.pipeline import ingest_document
         ingest_document(
             path,
             on_done=lambda ok, msg: self._ingest_done(card, ok, msg),
@@ -651,10 +651,10 @@ class ChatScreen(Screen):
         self._show_typing()
 
         if self._has_docs:
-            from src.rag.pipeline import ask
+            from rag.pipeline import ask
             ask(q, top_k=4, stream_cb=self._on_token, on_done=self._on_done)
         else:
-            from src.rag.pipeline import chat_direct
+            from rag.pipeline import chat_direct
             chat_direct(
                 q,
                 history  =list(self._history),

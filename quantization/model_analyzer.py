@@ -8,7 +8,7 @@ Usage (standalone):
     python -m quantize.model_analyzer path/to/model.gguf
 
 Usage (from code):
-    from quantize.model_analyzer import analyze_gguf, print_analysis
+    from quantization.model_analyzer import analyze_gguf, print_analysis
     info = analyze_gguf("models/gemma-3-4b-it-Q4_K_M.gguf")
     print_analysis(info)
 """

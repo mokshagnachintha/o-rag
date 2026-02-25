@@ -28,8 +28,8 @@ from kivy.clock import Clock
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.ui.screens.chat_screen import ChatScreen
-from src.rag.pipeline           import init
+from ui.screens.chat_screen import ChatScreen
+from rag.pipeline           import init
 
 
 class RAGApp(App):

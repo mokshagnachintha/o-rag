@@ -31,7 +31,7 @@ import time
 # ------------------------------------------------------------------ #
 
 def cmd_types(_args) -> int:
-    from quantize.quantizer import QUANT_TYPES
+    from quantization.quantizer import QUANT_TYPES
     print(f"\n{'Type':<12} {'Bits/weight':<14} Description")
     print("-" * 55)
     for name, meta in QUANT_TYPES.items():
@@ -50,7 +50,7 @@ def cmd_analyze(args) -> int:
         print(f"ERROR: file not found: {path}", file=sys.stderr)
         return 1
 
-    from quantize.model_analyzer import analyze_gguf, print_analysis, save_analysis_json
+    from quantization.model_analyzer import analyze_gguf, print_analysis, save_analysis_json
     print(f"\nAnalyzing: {path}")
     info = analyze_gguf(path)
     print_analysis(info)
@@ -66,7 +66,7 @@ def cmd_analyze(args) -> int:
 # ------------------------------------------------------------------ #
 
 def cmd_quantize(args) -> int:
-    from quantize.quantizer import quantize_gguf, estimate_output_size_mb
+    from quantization.quantizer import quantize_gguf, estimate_output_size_mb
 
     src        = args.src
     dst        = args.dst or _auto_dst(args.src, args.type)
@@ -141,7 +141,7 @@ def cmd_recipe(args) -> int:
 
     The resulting file is saved to ~/models/.
     """
-    from quantize.gemma3_recipe import (
+    from quantization.gemma3_recipe import (
         run_recipe, recipe_status, RECIPE_TARGETS,
         SOURCE_FILE, IMATRIX_FILE, REPO_ID,
     )
@@ -197,11 +197,11 @@ def cmd_recipe(args) -> int:
 def cmd_download(_args) -> int:
     import sys
 
-    # Add app root to path so we can import src.rag.downloader
+    # Add app root to path so we can import rag.downloader
     app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, app_root)
 
-    from src.rag.downloader import DEFAULT_MODEL, download_model, model_dest_path
+    from rag.downloader import DEFAULT_MODEL, download_model, model_dest_path
 
     dest = model_dest_path(DEFAULT_MODEL["filename"])
     print(f"\nDownloading: {DEFAULT_MODEL['label']}")
@@ -234,7 +234,7 @@ def cmd_download(_args) -> int:
     if result.get("ok"):
         print(f"\n  Downloaded to: {result['msg']}")
         print(f"\nAnalyzing model...\n")
-        from quantize.model_analyzer import analyze_gguf, print_analysis
+        from quantization.model_analyzer import analyze_gguf, print_analysis
         info = analyze_gguf(result["msg"])
         print_analysis(info)
         return 0

@@ -182,7 +182,7 @@ class DocsScreen(Screen):
     # ── helpers ──────────────────────────────────────────────────── #
 
     def _refresh_list(self):
-        from src.rag.db import list_documents
+        from rag.db import list_documents
         self._list.clear_widgets()
         docs = list_documents()
         if not docs:
@@ -237,7 +237,7 @@ class DocsScreen(Screen):
         import os
         name = os.path.basename(path)
         self._set_status(f"Ingesting '{name}'…", (0.9, 0.8, 0.3, 1))
-        from src.rag.pipeline import ingest_document
+        from rag.pipeline import ingest_document
         ingest_document(path, on_done=self._on_ingest_done)
 
     @mainthread
@@ -248,8 +248,8 @@ class DocsScreen(Screen):
             self._refresh_list()
 
     def _on_delete(self, doc_id: int):
-        from src.rag.db import delete_document
-        from src.rag.pipeline import retriever
+        from rag.db import delete_document
+        from rag.pipeline import retriever
         delete_document(doc_id)
         retriever.reload()
         self._refresh_list()
