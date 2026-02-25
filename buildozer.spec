@@ -27,7 +27,8 @@ requirements =
     idna,
     charset-normalizer,
     urllib3,
-    pypdf
+    pypdf,
+    plyer
 
 # Android bootstrap
 p4a.bootstrap = sdl2
