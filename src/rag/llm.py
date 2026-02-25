@@ -105,19 +105,24 @@ def _ensure_android_binary() -> Optional[str]:
         # openFd() returns an AssetFileDescriptor that gives a real Unix fd.
         # This works for ZIP_STORED (uncompressed) entries — which is exactly
         # how we store the binary in the APK.
-        afd = am.openFd("llama-server-arm64")
-        pfd = afd.getParcelFileDescriptor()
-        raw_fd = os.dup(pfd.getFd())   # dup so we own the fd
+        afd    = am.openFd("llama-server-arm64")
+        start  = int(afd.getStartOffset())    # offset of asset inside APK
+        length = int(afd.getDeclaredLength()) # exact byte count
+        pfd    = afd.getParcelFileDescriptor()
+        raw_fd = os.dup(pfd.getFd())           # dup so we own the fd
         pfd.close()
         afd.close()
+        os.lseek(raw_fd, start, os.SEEK_SET)  # seek to asset start
         written = 0
         with os.fdopen(raw_fd, "rb") as src, open(str(dest), "wb") as dst:
-            while True:
-                chunk = src.read(65536)
+            remaining = length
+            while remaining > 0:
+                chunk = src.read(min(65536, remaining))
                 if not chunk:
                     break
                 dst.write(chunk)
                 written += len(chunk)
+                remaining -= len(chunk)
         os.chmod(str(dest), 0o755)
         print(f"[llama-server] Extracted from APK asset ({written//1024} KB) → {dest}")
         _ANDROID_EXE_PATH = str(dest)

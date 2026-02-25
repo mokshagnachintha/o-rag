@@ -260,12 +260,14 @@ def extract_from_apk_asset(
             # openFd() gives a raw Unix file descriptor — works only for
             # ZIP_STORED (uncompressed) entries, which is exactly how we pack
             # the model. Use it for both size reporting AND the actual copy.
-            afd   = am.openFd(asset_name)
-            total = int(afd.getDeclaredLength())
-            pfd   = afd.getParcelFileDescriptor()
-            raw_fd = os.dup(pfd.getFd())
+            afd    = am.openFd(asset_name)
+            start  = int(afd.getStartOffset())    # byte offset of asset in APK
+            total  = int(afd.getDeclaredLength()) # exact asset size in bytes
+            pfd    = afd.getParcelFileDescriptor()
+            raw_fd = os.dup(pfd.getFd())           # dup so we own it
             pfd.close()
             afd.close()
+            os.lseek(raw_fd, start, os.SEEK_SET)  # seek to asset content
 
             os.makedirs(os.path.dirname(dest), exist_ok=True)
 
@@ -275,12 +277,14 @@ def extract_from_apk_asset(
                 on_progress(0.0, "Extracting bundled model…")
 
             with os.fdopen(raw_fd, "rb") as src, open(dest, "wb") as f:
-                while True:
-                    chunk = src.read(1024 * 512)
+                remaining = total
+                while remaining > 0:
+                    chunk = src.read(min(1024 * 512, remaining))
                     if not chunk:
                         break
                     f.write(chunk)
                     copied += len(chunk)
+                    remaining -= len(chunk)
                     if on_progress and total > 0:
                         frac  = min(copied / total, 0.99)
                         mb_d  = copied // 1_048_576
