@@ -367,7 +367,7 @@ class ChatScreen(Screen):
         )
         _paint(hdr, _HDR_BG)
         hdr.add_widget(Label(
-            text="[b]Offline RAG[/b]", markup=True,
+            text="[b]O-RAG[/b]", markup=True,
             color=_WHITE, font_size=sp(16),
             halign="center", valign="middle",
         ))

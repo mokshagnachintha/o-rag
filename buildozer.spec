@@ -1,7 +1,7 @@
 [app]
 # Application name and package
-title          = Offline RAG
-package.name   = offlinerag
+title          = O-RAG
+package.name   = orag
 package.domain = com.yourname
 
 source.dir    = .

@@ -33,7 +33,7 @@ from rag.pipeline           import init
 
 
 class RAGApp(App):
-    title = "Offline RAG"
+    title = "O-RAG"
 
     def build(self):
         root = BoxLayout(orientation="vertical")
