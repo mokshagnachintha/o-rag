@@ -503,16 +503,49 @@ class ChatScreen(Screen):
     def _on_model_ready(self, success: bool, message: str):
         if success:
             self._welcome._lbl.text = (
-                "✅  [b]Model ready![/b]\n\n"
-                "• Just type a message to chat with the AI.\n"
+                "👋  [b]How can I assist you today?[/b]\n\n"
+                "• Just type a message to chat with me.\n"
                 "• Tap [b]＋[/b] to attach a [b]PDF[/b] or [b]TXT[/b] — "
                 "I'll answer questions about its content."
             )
+            self._request_storage_permissions()
         else:
             self._welcome._lbl.text = (
                 f"[color=ff5555]⚠  Model failed to load:[/color]\n{message}\n\n"
                 "Check your connection and restart the app."
             )
+
+    # ---------------------------------------------------------------- #
+    #  Storage permission request                                       #
+    # ---------------------------------------------------------------- #
+
+    def _request_storage_permissions(self, *_):
+        """Ask for storage permissions on Android right after model loads."""
+        import os
+        if not os.environ.get("ANDROID_PRIVATE"):
+            return  # desktop — no-op
+        try:
+            from android.permissions import request_permissions, Permission  # type: ignore
+            sdk = 0
+            try:
+                from jnius import autoclass  # type: ignore
+                sdk = autoclass("android.os.Build$VERSION").SDK_INT
+            except Exception:
+                pass
+            if sdk >= 33:
+                # Android 13+ — READ_MEDIA_IMAGES covers images;
+                # documents/PDFs still come through SAF so no extra perm needed.
+                request_permissions([
+                    Permission.READ_MEDIA_IMAGES,
+                    Permission.READ_MEDIA_VIDEO,
+                ])
+            else:
+                request_permissions([
+                    Permission.READ_EXTERNAL_STORAGE,
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                ])
+        except Exception as e:
+            print(f"[permissions] Could not request: {e}")
 
     # ---------------------------------------------------------------- #
     #  Attach document via file picker                                  #

@@ -46,6 +46,8 @@ android.permissions =
     READ_EXTERNAL_STORAGE,
     WRITE_EXTERNAL_STORAGE,
     MANAGE_EXTERNAL_STORAGE,
+    READ_MEDIA_IMAGES,
+    READ_MEDIA_VIDEO,
     INTERNET
 
 android.api         = 34
