@@ -84,6 +84,9 @@ jobs:
           # Delete ALL stale dists (handles dist_name changes, e.g. offlinerag -> orag)
           rm -rf .buildozer/android/platform/build-arm64-v8a/dists/
           rm -rf ~/.buildozer/android/platform/build-arm64-v8a/dists/ 2>/dev/null || true
+          # Always wipe the app source dir so buildozer re-copies fresh files
+          # (stale cache causes "No main.py found" failure in p4a SDL2 bootstrap)
+          rm -rf .buildozer/android/app 2>/dev/null || true
           # Pin Cython to a version compatible with pyjnius (kivy dep)
           pip install "cython==0.29.37" --quiet
           # Ensure ~/.android exists (needed by keytool / sdkmanager)
