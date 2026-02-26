@@ -281,41 +281,55 @@ def _gen_via_server(
     top_p: float, stream_cb,
 ) -> str:
     import urllib.request
+    import urllib.error
     # llama-server native endpoint: /completion  (NOT /v1/completions)
+    # Note: do NOT include "cache_prompt" — it is rejected (HTTP 400) by
+    # many llama-server builds.
     payload = json.dumps({
-        "prompt": prompt,
-        "n_predict": max_tokens,
+        "prompt":      prompt,
+        "n_predict":   max_tokens,
         "temperature": temperature,
-        "top_p": top_p,
-        "stream": stream_cb is not None,
-        "cache_prompt": False,
+        "top_p":       top_p,
+        "stream":      stream_cb is not None,
     }).encode()
     url = f"http://127.0.0.1:{_LLAMASERVER_PORT}/completion"
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"}, method="POST",
     )
-    if stream_cb is not None:
-        full = ""
-        with urllib.request.urlopen(req) as resp:
-            for raw in resp:
-                line = raw.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    token = json.loads(data).get("content", "")
-                    full += token
-                    stream_cb(token)
-                except Exception:
-                    pass
-        return full
-    else:
-        with urllib.request.urlopen(req) as resp:
-            body = json.loads(resp.read())
-        return body.get("content", "")
+    try:
+        if stream_cb is not None:
+            full = ""
+            with urllib.request.urlopen(req) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        token = json.loads(data).get("content", "")
+                        full += token
+                        stream_cb(token)
+                    except Exception:
+                        pass
+            return full
+        else:
+            with urllib.request.urlopen(req) as resp:
+                body = json.loads(resp.read())
+            return body.get("content", "")
+    except urllib.error.HTTPError as e:
+        # Read the server's error body so we can show a meaningful message
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = "(no response body)"
+        raise RuntimeError(
+            f"llama-server HTTP {e.code}: {err_body[:300]}"
+        ) from e
+    except OSError as e:
+        raise RuntimeError(f"llama-server unreachable: {e}") from e
 
 
 # ------------------------------------------------------------------ #
