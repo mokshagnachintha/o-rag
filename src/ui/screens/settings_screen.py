@@ -20,7 +20,7 @@ from kivy.clock import mainthread
 from kivy.metrics import dp, sp
 from kivy.graphics import Color, RoundedRectangle
 
-from src.rag.downloader import GEMMA_MODELS, is_downloaded, download_model
+from rag.downloader import GEMMA_MODELS, is_downloaded, download_model
 
 
 # ------------------------------------------------------------------ #
@@ -98,7 +98,7 @@ class ModelRow(BoxLayout):
 
     def refresh_state(self):
         fname = self.meta["filename"]
-        from src.rag.llm import llm
+        from rag.llm import llm
 
         if is_downloaded(fname):
             loaded = llm.is_loaded() and Path(llm._model_path or "").name == fname
@@ -138,7 +138,7 @@ class ModelRow(BoxLayout):
     def _on_btn(self, *_):
         fname = self.meta["filename"]
         if is_downloaded(fname):
-            from src.rag.downloader import model_dest_path
+            from rag.downloader import model_dest_path
             self.on_load(model_dest_path(fname), self._on_load_done)
             self._btn.text     = "Loading..."
             self._btn.disabled = True
@@ -186,7 +186,7 @@ class SettingsScreen(Screen):
         self._rows: list = []
         self._build_ui()
         # Hook into the pipeline auto-download that started at app launch
-        from src.rag.pipeline import register_auto_download_callbacks
+        from rag.pipeline import register_auto_download_callbacks
         register_auto_download_callbacks(
             on_progress=self._on_auto_progress,
             on_done=self._on_auto_done,
@@ -340,7 +340,7 @@ class SettingsScreen(Screen):
     # ---- helpers ----
 
     def _update_model_status(self):
-        from src.rag.llm import llm
+        from rag.llm import llm
         if llm.is_loaded():
             name = Path(llm._model_path or "").name
             self._model_lbl.text  = f"Loaded: {name}"
@@ -353,7 +353,7 @@ class SettingsScreen(Screen):
         if not path:
             return
         self._set_status("Loading model... (may take a moment)", (0.9, 0.8, 0.3, 1))
-        from src.rag.pipeline import load_model
+        from rag.pipeline import load_model
         load_model(path, on_done=callback or self._on_manual_load_done)
 
     @mainthread
@@ -365,7 +365,7 @@ class SettingsScreen(Screen):
             row.refresh_state()
 
     def _on_unload(self, *_):
-        from src.rag.llm import llm
+        from rag.llm import llm
         llm.unload()
         self._update_model_status()
         self._set_status("Model unloaded.", (0.9, 0.6, 0.3, 1))
