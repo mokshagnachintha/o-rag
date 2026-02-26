@@ -79,6 +79,8 @@ def resolve_uri(path: str) -> str:
     unchanged.
     """
     import os
+    if not path:
+        raise ValueError("resolve_uri received an empty/None path")
     if not path.startswith("content://"):
         return path
     try:

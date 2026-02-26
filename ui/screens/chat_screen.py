@@ -552,6 +552,10 @@ class ChatScreen(Screen):
     # ---------------------------------------------------------------- #
 
     def _on_attach(self, *_):
+        # Guard: prevent double-open if picker is already showing
+        if getattr(self, "_picker_open", False):
+            return
+        self._picker_open = True
         try:
             import os
             from plyer import filechooser
@@ -567,6 +571,7 @@ class ChatScreen(Screen):
                 multiple=False,
             )
         except Exception as e:
+            self._picker_open = False
             self._add_msg(
                 "File picker unavailable on this device.\n"
                 "Type the [b]full path[/b] to your file and send it — "
@@ -576,7 +581,10 @@ class ChatScreen(Screen):
 
     @mainthread
     def _on_file_chosen(self, selection):
-        if not selection:
+        # Always reset the guard so the picker can be opened again later
+        self._picker_open = False
+        # plyer returns [None] on dismiss/cancel — treat as no selection
+        if not selection or selection[0] is None:
             return
         try:
             from rag.chunker import resolve_uri
