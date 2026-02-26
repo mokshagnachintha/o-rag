@@ -551,22 +551,110 @@ class ChatScreen(Screen):
     #  Attach document via file picker                                  #
     # ---------------------------------------------------------------- #
 
+    # Unique request code for startActivityForResult
+    _PICK_REQ = 0x4F52   # "OR"
+
     def _on_attach(self, *_):
-        # Guard: prevent double-open if picker is already showing
+        # Guard: prevent double-open if picker is already visible
         if getattr(self, "_picker_open", False):
             return
         self._picker_open = True
+        import os
+        if os.environ.get("ANDROID_PRIVATE"):
+            self._android_pick_file()
+        else:
+            self._desktop_pick_file()
+
+    # -- Android path: native startActivityForResult ------------------
+
+    def _android_pick_file(self):
         try:
-            import os
+            from jnius import autoclass          # type: ignore
+            from android.activity import bind as activity_bind  # type: ignore
+
+            # Register result handler before launching intent
+            activity_bind(on_activity_result=self._on_activity_result)
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Intent         = autoclass("android.content.Intent")
+
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("*/*")               # show all; filtered by MIME below
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+
+            # Restrict picker to PDF + plain-text via EXTRA_MIME_TYPES
+            try:
+                ArrayList = autoclass("java.util.ArrayList")
+                mimes = ArrayList()
+                mimes.add("application/pdf")
+                mimes.add("text/plain")
+                intent.putExtra("android.intent.extra.MIME_TYPES",
+                                mimes.toArray())
+            except Exception:
+                # Fallback: accept everything; resolve_uri will validate ext
+                pass
+
+            PythonActivity.mActivity.startActivityForResult(
+                intent, self._PICK_REQ
+            )
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            self._picker_open = False
+            self._add_msg(
+                f"[color=ff5555]\u274c  Could not open file picker:[/color]\n{e}",
+                role="assistant",
+            )
+
+    def _on_activity_result(self, request_code, result_code, data):
+        # Unregister immediately so we don't receive stale callbacks
+        try:
+            from android.activity import unbind as activity_unbind  # type: ignore
+            activity_unbind(on_activity_result=self._on_activity_result)
+        except Exception:
+            pass
+
+        self._picker_open = False
+
+        if request_code != self._PICK_REQ:
+            return
+        RESULT_OK = -1   # android.app.Activity.RESULT_OK
+        if result_code != RESULT_OK or data is None:
+            return
+
+        try:
+            uri = data.getData()
+            if uri is None:
+                return
+            uri_str = uri.toString()
+            Clock.schedule_once(lambda *_: self._process_picked_uri(uri_str), 0)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            self._add_msg(
+                f"[color=ff5555]\u274c  Could not read file URI:[/color]\n{e}",
+                role="assistant",
+            )
+
+    @mainthread
+    def _process_picked_uri(self, uri_str: str):
+        try:
+            from rag.chunker import resolve_uri
+            path = resolve_uri(uri_str)
+            self._stage_attachment(path)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            self._add_msg(
+                f"[color=ff5555]\u274c  Could not open file:[/color]\n{e}",
+                role="assistant",
+            )
+
+    # -- Desktop path: plyer fallback ---------------------------------
+
+    def _desktop_pick_file(self):
+        try:
             from plyer import filechooser
-            # Android requires MIME types; desktop uses glob filters
-            if os.environ.get("ANDROID_PRIVATE"):
-                filters = ["application/pdf", "text/plain"]
-            else:
-                filters = [["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]]
             filechooser.open_file(
                 on_selection=self._on_file_chosen,
-                filters=filters,
+                filters=[["Documents", "*.pdf", "*.txt", "*.PDF", "*.TXT"]],
                 title="Pick a document",
                 multiple=False,
             )
@@ -581,18 +669,15 @@ class ChatScreen(Screen):
 
     @mainthread
     def _on_file_chosen(self, selection):
-        # Always reset the guard so the picker can be opened again later
         self._picker_open = False
-        # plyer returns [None] on dismiss/cancel — treat as no selection
         if not selection or selection[0] is None:
             return
         try:
             from rag.chunker import resolve_uri
-            path = resolve_uri(selection[0])  # handle content:// on Android
+            path = resolve_uri(selection[0])
             self._stage_attachment(path)
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             self._add_msg(
                 f"[color=ff5555]\u274c  Could not open file:[/color]\n{e}",
                 role="assistant",
