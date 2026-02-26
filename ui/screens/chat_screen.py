@@ -578,9 +578,17 @@ class ChatScreen(Screen):
     def _on_file_chosen(self, selection):
         if not selection:
             return
-        from rag.chunker import resolve_uri
-        path = resolve_uri(selection[0])  # handle content:// on Android
-        self._stage_attachment(path)
+        try:
+            from rag.chunker import resolve_uri
+            path = resolve_uri(selection[0])  # handle content:// on Android
+            self._stage_attachment(path)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._add_msg(
+                f"[color=ff5555]\u274c  Could not open file:[/color]\n{e}",
+                role="assistant",
+            )
 
     def _stage_attachment(self, path: str):
         """Show the attachment preview card above the input bar."""

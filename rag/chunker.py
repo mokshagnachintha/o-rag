@@ -88,36 +88,41 @@ def resolve_uri(path: str) -> str:
         ctx = PythonActivity.mActivity
         uri = Uri.parse(path)
         # Get the display name from the content resolver
-        cursor = ctx.getContentResolver().query(uri, None, None, None, None)
         name = "attachment"
-        if cursor and cursor.moveToFirst():
-            idx = cursor.getColumnIndex("_display_name")
-            if idx >= 0:
-                name = cursor.getString(idx)
-            cursor.close()
-        # Copy bytes to private storage using ParcelFileDescriptor so we
-        # get a real Unix fd — avoids jnius bytearray/byte[] incompatibility.
+        cursor = ctx.getContentResolver().query(uri, None, None, None, None)
+        if cursor:
+            try:
+                if cursor.moveToFirst():
+                    idx = cursor.getColumnIndex("_display_name")
+                    if idx >= 0:
+                        name = cursor.getString(idx)
+            finally:
+                cursor.close()
+        # Copy bytes to private storage.
+        # Use getFd() + os.dup() so Python owns its own fd while the
+        # PFD is closed normally — avoids IllegalStateException from
+        # calling close() after detachFd().
         dest_dir = os.path.join(
             os.environ.get("ANDROID_PRIVATE", "/tmp"), "attachments"
         )
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, name)
         pfd = ctx.getContentResolver().openFileDescriptor(uri, "r")
-        fd_int = pfd.detachFd()
+        if pfd is None:
+            raise RuntimeError(f"openFileDescriptor returned None for URI: {path}")
         try:
-            with os.fdopen(fd_int, "rb") as src_f:
+            fd_dup = os.dup(pfd.getFd())     # duplicate — Python owns this fd
+            with os.fdopen(fd_dup, "rb") as src_f:
                 data = src_f.read()
         finally:
-            try:
-                pfd.close()
-            except Exception:
-                pass
+            pfd.close()                      # safe: pfd still owns the original fd
         with open(dest, "wb") as out_f:
             out_f.write(data)
         return dest
     except Exception as e:
-        print(f"[resolve_uri] failed: {e}")
-        return path
+        import traceback
+        traceback.print_exc()
+        raise RuntimeError(f"Could not read file from device: {e}") from e
 
 
 def extract_text(path: str) -> str:
