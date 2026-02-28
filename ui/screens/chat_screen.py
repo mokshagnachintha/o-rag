@@ -748,11 +748,11 @@ class ChatScreen(Screen):
         from rag.pipeline import ingest_document
         ingest_document(
             path,
-            on_done=lambda ok, msg: self._ingest_done(card, ok, msg),
+            on_done=lambda ok, msg: self._ingest_done(card, ok, msg, fname),
         )
 
     @mainthread
-    def _ingest_done(self, card: DocStatusCard, ok: bool, msg: str):
+    def _ingest_done(self, card: DocStatusCard, ok: bool, msg: str, fname: str = ""):
         card.set_done(ok, msg)
         if ok:
             self._has_docs = True

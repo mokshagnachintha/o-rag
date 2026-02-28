@@ -26,10 +26,27 @@ from kivy.graphics import Color, Rectangle
 from kivy.clock import Clock
 
 import sys
+import traceback
 sys.path.insert(0, os.path.dirname(__file__))
 
 from ui.screens.chat_screen import ChatScreen
 from rag.pipeline           import init
+
+
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    """Log unhandled exceptions instead of silently crashing."""
+    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    print(f"[CRASH] Unhandled exception:\n{msg}")
+    # Write to Android log file if possible
+    priv = os.environ.get("ANDROID_PRIVATE", "")
+    if priv:
+        try:
+            with open(os.path.join(priv, "crash.log"), "a") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+
+sys.excepthook = _global_exception_handler
 
 
 def _start_android_service():

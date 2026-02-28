@@ -177,17 +177,18 @@ MIN_NOMIC_BYTES = 10  * 1024 * 1024   # 10 MB
 
 
 def _wait_for_models(qwen_path: str, nomic_path: str, timeout: int = 600):
-    """Block until both model files are on disk (main app extracts them)."""
+    """Block until Qwen model file is on disk (main app extracts it).
+    Nomic is started lazily by the app on first PDF upload.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        qwen_ok  = os.path.isfile(qwen_path)  and os.path.getsize(qwen_path)  > MIN_QWEN_BYTES
-        nomic_ok = os.path.isfile(nomic_path) and os.path.getsize(nomic_path) > MIN_NOMIC_BYTES
-        if qwen_ok and nomic_ok:
-            print("[service] Both model files ready.")
+        qwen_ok = os.path.isfile(qwen_path) and os.path.getsize(qwen_path) > MIN_QWEN_BYTES
+        if qwen_ok:
+            print("[service] Qwen model file ready.")
             return True
-        print("[service] Waiting for model files…")
+        print("[service] Waiting for Qwen model file…")
         time.sleep(5)
-    print("[service] Timed out waiting for model files.")
+    print("[service] Timed out waiting for Qwen model file.")
     return False
 
 
@@ -204,14 +205,13 @@ def main():
         return
 
     qwen_proc  = None
-    nomic_proc = None
 
     while True:
         # ── Ensure Qwen server is running ── #
         if qwen_proc is None or qwen_proc.poll() is not None:
             if not _probe(QWEN_PORT):
                 print(f"[service] Starting Qwen server (port {QWEN_PORT})…")
-                qwen_proc = _launch(qwen_path, QWEN_PORT, n_ctx=1024)
+                qwen_proc = _launch(qwen_path, QWEN_PORT, n_ctx=512)
                 if qwen_proc and _wait(QWEN_PORT, timeout=180):
                     print(f"[service] Qwen server ready on port {QWEN_PORT}.")
                 else:
@@ -219,18 +219,6 @@ def main():
                     qwen_proc = None
             else:
                 print("[service] Qwen server already responding — reusing.")
-                # Server alive but proc reference lost (e.g. after service restart)
-
-        # ── Ensure Nomic server is running ── #
-        if nomic_proc is None or nomic_proc.poll() is not None:
-            if not _probe(NOMIC_PORT):
-                print(f"[service] Starting Nomic server (port {NOMIC_PORT})…")
-                nomic_proc = _launch(nomic_path, NOMIC_PORT, n_ctx=128)
-                if nomic_proc and _wait(NOMIC_PORT, timeout=60):
-                    print(f"[service] Nomic server ready on port {NOMIC_PORT}.")
-                else:
-                    print(f"[service] Nomic server failed to start.")
-                    nomic_proc = None
 
         # ── Heartbeat: check every 10 s ── #
         time.sleep(10)

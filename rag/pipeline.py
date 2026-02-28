@@ -87,19 +87,7 @@ def _start_auto_download() -> None:
                 _auto_dl_done_cb(False, _msg)
             return
 
-        # ── 1. Start the Nomic embedding server (port 8083) ─────────── #
-        # Done first while RAM is still clean; it only needs 512 context
-        # and ~200 MB RAM for the 80 MB Q4 model.
-        from .llm import start_nomic_server
-        import os
-        if os.path.isfile(nomic_path):
-            threading.Thread(
-                target=start_nomic_server,
-                args=(nomic_path,),
-                daemon=True,
-            ).start()
-
-        # ── 2. Load Qwen for generation (always use Qwen, not Nomic) ── #
+        # ── Load Qwen for generation only — Nomic starts lazily on first PDF ─ #
         if not llm.is_loaded():
             load_model(
                 qwen_path,
@@ -124,10 +112,21 @@ def ingest_document(
 ) -> None:
     """
     Ingest a .txt or .pdf file in a background thread.
+    Starts the Nomic embedding server on first call (lazy start to save RAM).
     on_done(success: bool, message: str) is called on completion.
     """
     def _run():
         try:
+            # Lazy-start Nomic server — only needed when indexing documents.
+            # Starting it at app launch wastes ~300 MB RAM on devices that
+            # never upload a PDF.
+            import os
+            nomic_path = model_dest_path(NOMIC_MODEL["filename"])
+            if os.path.isfile(nomic_path):
+                from .llm import start_nomic_server, _probe_port, _NOMIC_PORT
+                if not _probe_port(_NOMIC_PORT):
+                    start_nomic_server(nomic_path)
+
             name = Path(file_path).name
             doc_id = insert_document(name, file_path)
             chunks = process_document(file_path)
@@ -135,8 +134,9 @@ def ingest_document(
             update_doc_chunk_count(doc_id, len(chunks))
             retriever.reload()
             if on_done:
-                on_done(True, f"Ingested '{name}' — {len(chunks)} chunks")
+                on_done(True, f"Ingested '{name}' \u2014 {len(chunks)} chunks")
         except Exception as e:
+            import traceback; traceback.print_exc()
             if on_done:
                 on_done(False, f"Error: {e}")
 

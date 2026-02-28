@@ -532,7 +532,7 @@ class LlamaCppModel:
       3. llama-server      (auto-extracted from llamacpp_bin.zip)
     """
 
-    DEFAULT_CTX      = 1024
+    DEFAULT_CTX      = 512
     DEFAULT_MAX_TOK  = 512
     DEFAULT_TEMP     = 0.7
     DEFAULT_TOP_P    = 0.9
