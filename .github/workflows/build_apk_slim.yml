@@ -1,0 +1,224 @@
+name: Build Android APK (Slim — Download Models on Launch)
+# Produces a ~120 MB APK with NO bundled models.
+# On first launch the app downloads Qwen (~1.1 GB) and Nomic (~80 MB)
+# from Hugging Face automatically, then caches them permanently on device.
+# Total device storage used: ~1.32 GB vs ~2.5 GB for the bundled build.
+
+on:
+  workflow_dispatch:   # manual trigger only — run when you want the slim build
+
+jobs:
+  build-apk-slim:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────── #
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ─────────────────────────────────── #
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ── 3. Set up Java 17 (required by p4a's AGP 8.x) ────────────── #
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ── 4. System packages ────────────────────────────────── #
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip ninja-build \
+            autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo5 cmake libffi-dev libssl-dev \
+            wget lld clang
+
+      # ── 5. Install Buildozer + python-for-android ────────── #
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip setuptools wheel cython
+          pip install buildozer python-for-android
+
+      # ── 6. Cache Android SDK/NDK and p4a builds ──────────── #
+      - name: Cache Buildozer global dir
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ github.repository_id }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-${{ runner.os }}-${{ github.repository_id }}-
+
+      - name: Cache .buildozer project dir
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: buildozer-project-${{ runner.os }}-${{ github.repository_id }}-${{ hashFiles('buildozer.spec','requirements.txt') }}
+          restore-keys: buildozer-project-${{ runner.os }}-${{ github.repository_id }}-
+
+      # ── 7. Clone llama.cpp source ─────────────────────────── #
+      - name: Clone llama.cpp source
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /tmp/llama_cpp_src
+          echo "llama.cpp cloned: $(ls /tmp/llama_cpp_src)"
+
+      # ── 8. Build APK ─────────────────────────────────────── #
+      - name: Build Android debug APK
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m"
+        run: |
+          java -version
+          unset PYTHONHOME PYTHONPATH
+          rm -rf .buildozer/android/platform/build-arm64-v8a/build/other_builds/hostpython3 2>/dev/null || true
+          rm -rf ~/.buildozer/android/platform/build-arm64-v8a/build/other_builds/hostpython3 2>/dev/null || true
+          rm -rf .buildozer/android/platform/build-arm64-v8a/dists/
+          rm -rf ~/.buildozer/android/platform/build-arm64-v8a/dists/ 2>/dev/null || true
+          rm -rf .buildozer/android/app 2>/dev/null || true
+          pip install "cython==0.29.37" --quiet
+          mkdir -p ~/.android && touch ~/.android/repositories.cfg
+          yes 2>/dev/null | buildozer android debug 2>&1 | tee build.log
+          exit ${PIPESTATUS[1]}
+
+      # ── 9. Compile llama-server + patch binary only into APK ── #
+      # No models are bundled. On first launch the app will download
+      # Qwen (~1.1 GB) and Nomic (~80 MB) from Hugging Face via the
+      # auto_download_default() path in rag/downloader.py.
+      - name: Bundle server binary into APK (no models)
+        run: |
+          set -e
+
+          # ── 9a. Compile llama-server for Android ARM64 ───────────────
+          echo "=== Step 9a: Compiling llama-server for Android ARM64 ==="
+
+          NDK_HOME=$(find $HOME/.buildozer/android/platform -maxdepth 1 \
+            -name "android-ndk-*" -type d | head -1)
+          TOOLCHAIN="$NDK_HOME/build/cmake/android.toolchain.cmake"
+
+          echo "NDK: $NDK_HOME"
+
+          if [ ! -f "$TOOLCHAIN" ]; then
+            echo "FATAL: Android NDK toolchain not found!"
+            exit 1
+          fi
+
+          cmake -S /tmp/llama_cpp_src -B llama_build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_SERVER_VERBOSE=OFF
+
+          cmake --build llama_build --target llama-server -j$(nproc)
+
+          BIN=$(find llama_build -name "llama-server" -type f 2>/dev/null | head -1)
+          if [ -z "$BIN" ]; then
+            echo "ERROR: llama-server binary not found."
+            exit 1
+          fi
+
+          cp "$BIN" llama-server-arm64
+          chmod 755 llama-server-arm64
+
+          # Strip debug symbols to shrink binary (~15-25 MB saved)
+          STRIP="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          if [ -f "$STRIP" ]; then
+            "$STRIP" --strip-unneeded llama-server-arm64
+          fi
+          echo "Binary size: $(du -sh llama-server-arm64)"
+
+          # ── 9b. Patch APK — inject binary only, NO models ────────────
+          echo "=== Step 9b: Patching APK (binary only) ==="
+          python3 - <<'PYEOF'
+          import zipfile, glob, os
+
+          apk   = glob.glob("bin/*.apk")[0]
+          srv   = "llama-server-arm64"
+          tmp   = apk + ".tmp"
+          CHUNK = 4 * 1024 * 1024
+
+          print(f"APK:    {apk}  ({os.path.getsize(apk)//1_048_576} MB)")
+          print(f"Binary: {srv}  ({os.path.getsize(srv)//1024} KB)")
+          print("NOTE: No models bundled — app will download on first launch.")
+
+          with zipfile.ZipFile(apk, "r") as src, \
+               zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as dst:
+
+              for item in src.infolist():
+                  if item.filename.startswith("META-INF/"):
+                      continue
+                  dst.writestr(item, src.read(item.filename))
+
+              # Bundle as a native library so Android extracts it to nativeLibraryDir
+              # (the only SELinux-allowed execve() location on Android 10+)
+              print("Adding lib/arm64-v8a/libllama_server.so (ZIP_STORED)...")
+              bi = zipfile.ZipInfo("lib/arm64-v8a/libllama_server.so")
+              bi.compress_type = zipfile.ZIP_STORED
+              bi.external_attr = 0o755 << 16
+              with open(srv, "rb") as bf, dst.open(bi, "w") as zo:
+                  while chunk := bf.read(CHUNK):
+                      zo.write(chunk)
+
+          os.replace(tmp, apk)
+          final_size = os.path.getsize(apk)
+          print(f"Done. Final APK: {final_size//1_048_576} MB  (models download on first launch)")
+
+          with zipfile.ZipFile(apk, 'r') as vf:
+              names = vf.namelist()
+              check = "lib/arm64-v8a/libllama_server.so"
+              found = check in names
+              sz = vf.getinfo(check).file_size // 1024 if found else 0
+              print(f"  {'OK' if found else 'MISSING'}: {check} ({sz} KB)")
+          PYEOF
+
+          # ── 9c. Sign APK ──────────────────────────────────────────────
+          echo "=== Step 9c: Signing APK ==="
+          mkdir -p ~/.android
+          keytool -genkey -v \
+            -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -noprompt 2>/dev/null || true
+
+          APKSIGNER=$(find $HOME/.buildozer/android/platform/android-sdk/build-tools \
+            -name "apksigner" -type f 2>/dev/null | sort -V | tail -1)
+          APK=$(find bin -name "*.apk" | head -1)
+          "$APKSIGNER" sign \
+            --ks ~/.android/debug.keystore \
+            --ks-pass pass:android --key-pass pass:android \
+            "$APK"
+
+          echo "=== FINAL APK ==="
+          ls -lh bin/*.apk
+
+      # ── 10. Upload slim APK as artifact ────────────────────── #
+      - name: Upload Slim APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: O-RAG-slim-apk
+          path: bin/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      # ── 11. Upload build log on failure ────────────────────── #
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-slim
+          path: build.log
+          retention-days: 7
