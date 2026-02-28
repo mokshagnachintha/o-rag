@@ -13,12 +13,11 @@ Lifecycle:
   5. Android OS keeps it alive because it is a foreground service
      (p4a automatically promotes it and shows a persistent notification).
 """
-from __future__ import annotations
-
 import os
 import subprocess
 import time
 from pathlib import Path
+from typing import List, Optional
 
 # ------------------------------------------------------------------ #
 #  Android plumbing                                                    #
@@ -72,7 +71,7 @@ def _models_dir() -> str:
     return d
 
 
-def _server_exe() -> Path | None:
+def _server_exe() -> Optional[Path]:
     """Locate llama-server binary — same logic as rag/llm.py."""
     # Android: extracted as a native .so to nativeLibraryDir
     try:
@@ -129,7 +128,7 @@ def _wait(port: int, timeout: int = 180) -> bool:
 
 
 def _launch(model_path: str, port: int,
-            n_ctx: int = 2048, extra_flags: list | None = None) -> subprocess.Popen | None:
+            n_ctx: int = 2048, extra_flags: Optional[List[str]] = None) -> Optional[subprocess.Popen]:
     exe = _server_exe()
     if exe is None:
         print("[service] llama-server binary not found.")
