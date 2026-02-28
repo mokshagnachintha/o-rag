@@ -748,8 +748,8 @@ class _ThinkingStreamFilter:
 
 def build_rag_prompt(context_chunks: list[str], question: str) -> str:
     """
-    Build a RAG prompt using Gemma's <start_of_turn> instruction format.
-    Works with all gemma-it / gemma-2-it / gemma-3-it GGUF models.
+    Build a RAG prompt using Qwen 2.5's ChatML instruction format.
+    (<|im_start|> / <|im_end|> tokens)
     """
     ctx_text = "\n\n---\n\n".join(context_chunks)
     system_msg = (
@@ -758,14 +758,13 @@ def build_rag_prompt(context_chunks: list[str], question: str) -> str:
         "Write at least 2-3 sentences — never give a one-word answer. "
         "Do NOT just repeat the question. "
         "If the answer is not in the context, say \"I don't know.\". "
-        "Reply with only your final answer — no reasoning steps, no thinking process."
+        "Reply with only your final answer — no reasoning steps."
     )
     return (
-        f"<start_of_turn>user\n"
-        f"{system_msg}\n\n"
-        f"Context:\n{ctx_text}\n\n"
-        f"Question: {question}<end_of_turn>\n"
-        f"<start_of_turn>model\n"
+        f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+        f"<|im_start|>user\n"
+        f"Context:\n{ctx_text}\n\nQuestion: {question}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
     )
 
 
@@ -774,9 +773,7 @@ def build_direct_prompt(
     history: list[tuple[str, str]] | None = None,
 ) -> str:
     """
-    Build a plain conversational prompt (no document context) using
-    Gemma's multi-turn <start_of_turn> format.
-
+    Build a plain conversational prompt using Qwen 2.5's ChatML format.
     history: list of (user_text, assistant_text) pairs from previous turns.
     """
     system_msg = (
@@ -784,23 +781,20 @@ def build_direct_prompt(
         "Answer the user's question directly and completely. "
         "Write at least 2-3 sentences. "
         "Do NOT just repeat the question or echo back one word. "
-        "Reply with only your final answer — no reasoning steps, no thinking process."
+        "Reply with only your final answer — no reasoning steps."
     )
-    parts: list[str] = []
+    parts: list[str] = [f"<|im_start|>system\n{system_msg}<|im_end|>\n"]
 
-    # Include up to the last 6 turns of history to keep context manageable
+    # Include up to the last 6 turns of history
     for user_msg, asst_msg in (history or [])[-6:]:
         parts.append(
-            f"<start_of_turn>user\n{user_msg}<end_of_turn>\n"
-            f"<start_of_turn>model\n{asst_msg}<end_of_turn>\n"
+            f"<|im_start|>user\n{user_msg}<|im_end|>\n"
+            f"<|im_start|>assistant\n{asst_msg}<|im_end|>\n"
         )
 
-    # Current turn
     parts.append(
-        f"<start_of_turn>user\n"
-        f"{system_msg}\n\n"
-        f"{question}<end_of_turn>\n"
-        f"<start_of_turn>model\n"
+        f"<|im_start|>user\n{question}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
     )
     return "".join(parts)
 

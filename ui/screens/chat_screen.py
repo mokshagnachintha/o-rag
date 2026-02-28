@@ -347,9 +347,11 @@ class ChatScreen(Screen):
         self._current_row:    MessageRow | None       = None
         self._typing:         _TypingIndicator | None = None
         self._has_docs:       bool                    = False
-        self._pending_attach: str | None              = None   # path of staged file
+        self._pending_attach: str | None              = None
         self._attach_card:    AttachmentPreviewCard | None = None
-        self._scroll_pending: bool                   = False   # debounce auto-scroll
+        self._scroll_pending: bool                   = False
+        self._model_ready:    bool                   = False   # True once LLM is loaded
+        self._send_btn:       Button | None          = None    # ref for dimming
         self._build_ui()
 
     # ---------------------------------------------------------------- #
@@ -466,6 +468,8 @@ class ChatScreen(Screen):
         _paint(send_btn, _GREEN, radius=20)
         send_btn.bind(on_release=self._on_send)
         send_anc.add_widget(send_btn)
+        self._send_btn = send_btn   # keep ref so we can dim it while loading
+        send_btn.opacity = 0.4       # dimmed until model is ready
 
         bar.add_widget(pill)
         bar.add_widget(send_anc)
@@ -502,6 +506,11 @@ class ChatScreen(Screen):
     @mainthread
     def _on_model_ready(self, success: bool, message: str):
         if success:
+            self._model_ready = True
+            # Restore send button to full opacity
+            if self._send_btn:
+                self._send_btn.color = _WHITE
+                self._send_btn.opacity = 1.0
             self._welcome._lbl.text = (
                 "👋  [b]How can I assist you today?[/b]\n\n"
                 "• Just type a message to chat with me.\n"
@@ -510,6 +519,7 @@ class ChatScreen(Screen):
             )
             self._request_storage_permissions()
         else:
+            self._model_ready = False
             self._welcome._lbl.text = (
                 f"[color=ff5555]⚠  Model failed to load:[/color]\n{message}\n\n"
                 "Check your connection and restart the app."
@@ -766,6 +776,17 @@ class ChatScreen(Screen):
 
         # Nothing to do if both empty
         if not q and not path:
+            return
+
+        # Block sends until the LLM is ready
+        if not self._model_ready:
+            self._add_msg(
+                "⌛  [b]Model is still loading, please wait…[/b]\n"
+                "[color=888888][size=12sp]"
+                "This takes 1-2 minutes on first launch while the AI warms up."
+                "[/size][/color]",
+                role="assistant",
+            )
             return
 
         self._input.text = ""
