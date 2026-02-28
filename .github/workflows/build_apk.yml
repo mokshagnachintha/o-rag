@@ -183,9 +183,9 @@ jobs:
           python3 - <<'PYEOF'
           import zipfile, glob, os
 
-          apk   = glob.glob("bin/*.apk")[0]
-          model = glob.glob("model_tmp/*.gguf")[0]
-          srv   = "llama-server-arm64"
+          apk        = glob.glob("bin/*.apk")[0]
+          model      = glob.glob("model_tmp/qwen*.gguf")[0]   # must be Qwen, not nomic
+          srv        = "llama-server-arm64"
           tmp   = apk + ".tmp"
           CHUNK = 4 * 1024 * 1024
 
