@@ -26,38 +26,26 @@ from typing import Callable, Optional
 
 
 # ------------------------------------------------------------------ #
-#  Catalogue of available Gemma GGUF models                           #
+#  Catalogue of available Mobile RAG GGUF models                     #
 # ------------------------------------------------------------------ #
 
-# The model that is bundled in the APK and auto-used on first launch (Apache 2.0, no login needed)
-DEFAULT_MODEL: dict = {
-    "label":    "Gemma 3 1B i1-Q5_K_M uncensored (bundled, ~851 MB)",
-    "repo_id":  "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-    "filename": "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q5_K_M.gguf",
-    "size_mb":  851,
+# The primary Generation model
+QWEN_MODEL: dict = {
+    "label":    "Qwen 2.5 1.5B Instruct Q4_K_M (~1.1 GB)",
+    "repo_id":  "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "filename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "size_mb":  1120,
 }
 
-GEMMA_MODELS: list[dict] = [
-    DEFAULT_MODEL,
-    {
-        "label":    "Gemma 3 1B i1-Q2_K (~690 MB)",
-        "repo_id":  "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-        "filename": "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q2_K.gguf",
-        "size_mb":  690,
-    },
-    {
-        "label":    "Gemma 3 1B i1-Q5_K_M (~851 MB)",
-        "repo_id":  "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-        "filename": "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q5_K_M.gguf",
-        "size_mb":  851,
-    },
-    {
-        "label":    "Gemma 3 1B i1-Q6_K (~1.0 GB)",
-        "repo_id":  "mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-        "filename": "Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q6_K.gguf",
-        "size_mb":  1010,
-    },
-]
+# The primary Embedding model
+NOMIC_MODEL: dict = {
+    "label":    "Nomic Embed Text v1.5 Q4_K_M (~80 MB)",
+    "repo_id":  "nomic-ai/nomic-embed-text-v1.5-GGUF",
+    "filename": "nomic-embed-text-v1.5.Q4_K_M.gguf",
+    "size_mb":  80,
+}
+
+MOBILE_MODELS: list[dict] = [QWEN_MODEL, NOMIC_MODEL]
 
 
 # ------------------------------------------------------------------ #
@@ -244,7 +232,7 @@ def extract_from_apk_asset(
       • Not running on Android
       • Asset not found in APK (will trigger HF download fallback)
     """
-    dest = model_dest_path(DEFAULT_MODEL["filename"])
+    dest = model_dest_path(QWEN_MODEL["filename"])
 
     def _run():
         try:
@@ -303,59 +291,69 @@ def auto_download_default(
     on_done:     Optional[Callable[[bool, str], None]]  = None,
 ) -> None:
     """
-    Locate or prepare the default model.  Priority order:
-      1. Already present in models/ dir (previous run)
-      2. Bundled inside the APK as assets/models/model.gguf  (Android)
-         → copy to writable storage on first launch
-      3. Bundled in the project directory (desktop dev)
-      4. Download from Hugging Face Hub
+    Ensure both the Qwen (Generation) and Nomic (Embedding) models are ready.
+    Logic priority:
+      1. Already present in models/ dir
+      2. Bundled inside the APK (Android) -> Extract Qwen
+      3. Bundled in project dev folder
+      4. Download from HuggingFace
     """
-    filename = DEFAULT_MODEL["filename"]
-    dest     = model_dest_path(filename)
+    qwen_dest  = model_dest_path(QWEN_MODEL["filename"])
+    nomic_dest = model_dest_path(NOMIC_MODEL["filename"])
 
-    # 1. Already on disk — load immediately
-    if os.path.isfile(dest) and os.path.getsize(dest) > 50 * 1024 * 1024:
-        if on_progress:
-            on_progress(1.0, "Model ready.")
-        if on_done:
-            on_done(True, dest)
-        return
+    def _prepare_nomic():
+        # Step 2: Ensure Nomic embedding model is present
+        if os.path.isfile(nomic_dest) and os.path.getsize(nomic_dest) > 10 * 1024 * 1024:
+            if on_progress: on_progress(1.0, "All models ready.")
+            if on_done: on_done(True, "All models ready.")
+            return
 
-    # 2. Extract from APK asset (Android only)
-    if os.environ.get("ANDROID_PRIVATE"):
-        def _after_extract(ok, path_or_err):
-            if ok:
-                if on_done:
-                    on_done(True, path_or_err)
-            else:
-                # APK asset not found → fall back to HF download
-                download_model(
-                    repo_id     = DEFAULT_MODEL["repo_id"],
-                    filename    = DEFAULT_MODEL["filename"],
-                    on_progress = on_progress,
-                    on_done     = on_done,
-                )
-
-        extract_from_apk_asset(
-            asset_name  = "models/model.gguf",
+        # Nomic is small (~80MB), just download it directly from HF
+        download_model(
+            repo_id     = NOMIC_MODEL["repo_id"],
+            filename    = NOMIC_MODEL["filename"],
             on_progress = on_progress,
-            on_done     = _after_extract,
+            on_done     = on_done
         )
-        return
 
-    # 3. Bundled with the project — use in place (desktop dev)
-    bundled = _bundled_model_path(filename)
-    if bundled and bundled != dest:
-        if on_progress:
-            on_progress(1.0, "Using bundled model.")
-        if on_done:
-            on_done(True, bundled)
-        return
+    def _prepare_qwen():
+        # Step 1: Ensure Qwen generation model is present
+        
+        # 1. Already on disk
+        if os.path.isfile(qwen_dest) and os.path.getsize(qwen_dest) > 50 * 1024 * 1024:
+            _prepare_nomic()
+            return
 
-    # 4. Download from Hugging Face
-    download_model(
-        repo_id     = DEFAULT_MODEL["repo_id"],
-        filename    = DEFAULT_MODEL["filename"],
-        on_progress = on_progress,
-        on_done     = on_done,
-    )
+        # 2. Extract from APK asset (Android only)
+        if os.environ.get("ANDROID_PRIVATE"):
+            def _after_extract(ok, path_or_err):
+                if ok:
+                    _prepare_nomic()
+                else:
+                    # Fallback to HF download for Qwen
+                    download_model(
+                        repo_id     = QWEN_MODEL["repo_id"],
+                        filename    = QWEN_MODEL["filename"],
+                        on_progress = on_progress,
+                        on_done     = lambda ok, msg: _prepare_nomic() if ok else on_done(False, msg),
+                    )
+
+            extract_from_apk_asset("models/model.gguf", on_progress, _after_extract)
+            return
+
+        # 3. Bundled with the project (desktop dev)
+        bundled = _bundled_model_path(QWEN_MODEL["filename"])
+        if bundled and bundled != qwen_dest:
+            _prepare_nomic()
+            return
+
+        # 4. Download from Hugging Face
+        download_model(
+            repo_id     = QWEN_MODEL["repo_id"],
+            filename    = QWEN_MODEL["filename"],
+            on_progress = on_progress,
+            on_done     = lambda ok, msg: _prepare_nomic() if ok else on_done(False, msg),
+        )
+
+    # Start the chain
+    _prepare_qwen()

@@ -60,7 +60,7 @@ jobs:
           key: buildozer-project-${{ runner.os }}-${{ github.repository_id }}-${{ hashFiles('buildozer.spec','requirements.txt') }}
           restore-keys: buildozer-project-${{ runner.os }}-${{ github.repository_id }}-
 
-      # ── 6. Clone llama.cpp source (compiled after NDK is ready) ─────── #
+      # ── 7. Clone llama.cpp source (compiled after NDK is ready) ─────── #
       - name: Clone llama.cpp source
         run: |
           # Clone to /tmp so it is NOT inside the workspace (source.dir=.)
@@ -256,7 +256,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # ── 10. Upload build log if anything fails ─────────────── #
+      # ── 11. Upload build log if anything fails ─────────────── #
       - name: Upload build log (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
@@ -264,4 +264,3 @@ jobs:
           name: build-log
           path: build.log
           retention-days: 7
-

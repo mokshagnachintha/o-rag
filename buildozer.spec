@@ -62,8 +62,8 @@ android.allow_backup = False
 android.add_jvm_options = -Xmx768m
 
 # App icon
-icon.filename      = %(source.dir)s/assets/icon.png
-presplash.filename = %(source.dir)s/assets/presplash.png
+icon.filename      = %(source.dir)s/assets/app_icon.png
+presplash.filename = %(source.dir)s/assets/app_splash.png
 
 [buildozer]
 log_level = 2

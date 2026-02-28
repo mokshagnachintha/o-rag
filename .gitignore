@@ -1,55 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-dist/
-build/
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Buildozer
-.buildozer/
-bin/
-
-# Android SDK/NDK (downloaded by buildozer)
-~/.buildozer/
-
-# Large model files — DO NOT commit
+# Large model files
 *.gguf
 *.bin
-*.safetensors
-*.pt
-*.pth
+model_tmp/
+.buildozer/
+__pycache__/
+*.pyc
 
-# Zip archives that contain binaries
-llamacpp_bin.zip
-
-# Windows llama.cpp pre-built binaries (not needed for Android build)
 llamacpp_bin/
 
-# IDE
-.vscode/settings.json
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-build-log-*/
-bin_*/
-
-# Media / reference images (put these in a separate assets/ subfolder if needed)
-*.jpeg
-*.jpg
-!assets/*.png
-
-# Documents / papers
-*.pdf
