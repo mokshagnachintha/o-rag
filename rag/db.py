@@ -19,8 +19,9 @@ DB_PATH = os.path.join(
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL;")  # faster concurrent writes
+    conn.execute("PRAGMA journal_mode=WAL;")   # faster concurrent writes
     conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")    # enable CASCADE deletes
     return conn
 
 
@@ -55,15 +56,19 @@ def init_db() -> None:
 
 def insert_document(name: str, path: str) -> int:
     with get_conn() as conn:
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO documents(name, path) VALUES (?, ?)", (name, path)
-        )
-        if cur.lastrowid:
-            return cur.lastrowid
-        row = conn.execute(
+        # Check if this path already exists — if so, delete its old chunks
+        # so re-uploading the same file doesn't accumulate duplicates.
+        existing = conn.execute(
             "SELECT id FROM documents WHERE path=?", (path,)
         ).fetchone()
-        return row[0]
+        if existing:
+            doc_id = existing[0]
+            conn.execute("DELETE FROM chunks WHERE doc_id=?", (doc_id,))
+            return doc_id
+        cur = conn.execute(
+            "INSERT INTO documents(name, path) VALUES (?, ?)", (name, path)
+        )
+        return cur.lastrowid
 
 
 def update_doc_chunk_count(doc_id: int, count: int) -> None:

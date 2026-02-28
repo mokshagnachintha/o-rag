@@ -172,6 +172,8 @@ def get_available_models() -> list[str]:
 def clear_all_documents() -> None:
     """Delete all ingested documents + chunks and reset the in-memory retriever."""
     with get_conn() as conn:
+        # Delete chunks explicitly first (in case foreign_keys was OFF in old DBs)
+        conn.execute("DELETE FROM chunks")
         conn.execute("DELETE FROM documents")
     retriever.reload()
 
