@@ -533,7 +533,7 @@ class LlamaCppModel:
     """
 
     DEFAULT_CTX      = 768
-    DEFAULT_MAX_TOK  = 256
+    DEFAULT_MAX_TOK  = 320
     DEFAULT_TEMP     = 0.7
     DEFAULT_TOP_P    = 0.9
     DEFAULT_THREADS  = 0   # 0 = auto-detect via _optimal_threads()
