@@ -177,26 +177,37 @@ def _extract_zip_if_needed() -> bool:
     return _server_exe() is not None
 
 
-def _wait_for_server(port: int, timeout: int = 120) -> bool:
+def _wait_for_server(port: int, timeout: int = 120,
+                     on_tick: Optional[Callable[[float, str], None]] = None) -> bool:
     import urllib.request
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.time() + timeout
+    started  = time.time()
+    last_tick = 0.0
     while time.time() < deadline:
-        # Fail fast: if the process already died, stop waiting immediately
-        if _LLAMASERVER_PROC is not None and _LLAMASERVER_PROC.poll() is not None:
-            print(f"[llama-server] process exited early (code={_LLAMASERVER_PROC.returncode})")
+        proc = _LLAMASERVER_PROC if port == _LLAMASERVER_PORT else _NOMIC_PROC
+        if proc is not None and proc.poll() is not None:
+            print(f"[llama-server port={port}] process exited early (code={proc.returncode})")
             return False
         try:
             with urllib.request.urlopen(url, timeout=2) as r:
                 if r.status == 200:
+                    if on_tick:
+                        on_tick(1.0, "AI engine ready!")
                     return True
         except Exception:
             pass
+        elapsed = time.time() - started
+        if on_tick and elapsed - last_tick >= 1.0:
+            last_tick = elapsed
+            pct = min(elapsed / timeout, 0.95)
+            on_tick(pct, f"Loading model into memory\u2026 {int(elapsed)}s")
         time.sleep(0.5)
     return False
 
 
-def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
+def _start_llama_server(model_path: str, n_ctx: int, n_threads: int,
+                        on_progress: Optional[Callable[[float, str], None]] = None) -> bool:
     global _LLAMASERVER_PROC, _ANDROID_BINARY_ERROR
     exe = _server_exe()
     if exe is None:
@@ -211,13 +222,14 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
             "--threads",  str(n_threads),
             "--port",     str(_LLAMASERVER_PORT),
             "--host",     "127.0.0.1",
-            "--embedding",   # enable /embedding endpoint for semantic retrieval
+            "--embedding",
         ]
         print(f"[llama-server] Starting: {cmd[0]}")
         print(f"  Model: {Path(model_path).name}")
         print("  Loading model into memory, please wait ...")
+        if on_progress:
+            on_progress(0.02, f"Starting AI engine\u2026 ({Path(model_path).name})")
         cf = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        # On Android, write server log to a file so we can read it on failure
         log_file = None
         priv = os.environ.get("ANDROID_PRIVATE", "")
         if priv:
@@ -239,10 +251,9 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
             _ANDROID_BINARY_ERROR = f"Popen failed: {type(exc).__name__}: {exc}"
             print(f"[llama-server] Launch failed: {exc}")
             return False
-    ready = _wait_for_server(_LLAMASERVER_PORT, timeout=180)
+    ready = _wait_for_server(_LLAMASERVER_PORT, timeout=180, on_tick=on_progress)
     if not ready:
         _stop_llama_server()
-        # Read last 500 bytes from the log file for diagnostics
         priv = os.environ.get("ANDROID_PRIVATE", "")
         if priv:
             try:
@@ -495,7 +506,8 @@ class LlamaCppModel:
     # ---------------------------------------------------------------- #
 
     def load(self, model_path: str, n_ctx: int = DEFAULT_CTX,
-             n_threads: int = DEFAULT_THREADS, n_gpu_layers: int = 0) -> None:
+             n_threads: int = DEFAULT_THREADS, n_gpu_layers: int = 0,
+             on_progress: Optional[Callable[[float, str], None]] = None) -> None:
         with self._lock:
             self._unload_internal()
 
@@ -526,7 +538,8 @@ class LlamaCppModel:
 
             # 3. llama-server (bundled binary)
             _extract_zip_if_needed()
-            if _start_llama_server(model_path, n_ctx, n_threads):
+            if _start_llama_server(model_path, n_ctx, n_threads,
+                                   on_progress=on_progress):
                 self._model_path = model_path
                 self._backend    = "llama_server"
                 print("[LLM] Backend: llama-server (built-in)")

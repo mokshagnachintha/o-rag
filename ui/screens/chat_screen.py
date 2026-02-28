@@ -495,13 +495,30 @@ class ChatScreen(Screen):
 
     @mainthread
     def _on_model_progress(self, frac: float, text: str):
-        pct     = int(frac * 100)
-        filled  = "█" * (pct // 10)
-        empty   = "░" * (10 - pct // 10)
+        # Determine which stage we are in based on the progress text
+        txt_lo = text.lower()
+        if "extract" in txt_lo:
+            stage = "\u2699\ufe0f  [b]Extracting model from APK\u2026[/b]"
+            icon  = "\u2699\ufe0f"
+        elif "start" in txt_lo or "engine" in txt_lo or "loading model" in txt_lo:
+            stage = "\u26a1  [b]Starting AI engine\u2026[/b]"
+            icon  = "\u26a1"
+        elif "connect" in txt_lo or "hugging" in txt_lo or "download" in txt_lo or "/" in text:
+            stage = "\u2b07\ufe0f  [b]Downloading model\u2026[/b]"
+            icon  = "\u2b07\ufe0f"
+        else:
+            stage = "\u23f3  [b]Preparing\u2026[/b]"
+            icon  = "\u23f3"
+
+        pct    = int(min(frac, 0.999) * 100)
+        filled = "\u2588" * (pct // 10)
+        empty  = "\u2591" * (10 - pct // 10)
+        bar    = f"[color=19c37d]{filled}[/color][color=555555]{empty}[/color]"
+
         self._welcome._lbl.text = (
-            f"⏳  [b]Preparing model…[/b]  {pct}%\n"
-            f"[size=11sp][color=888888]{filled}{empty}[/color][/size]\n"
-            f"{text}"
+            f"{stage}\n\n"
+            f"[size=13sp]{bar}  {pct}%[/size]\n"
+            f"[size=12sp][color=aaaaaa]{text}[/color][/size]"
         )
 
     @mainthread
@@ -782,9 +799,10 @@ class ChatScreen(Screen):
         # Block sends until the LLM is ready
         if not self._model_ready:
             self._add_msg(
-                "⌛  [b]Model is still loading, please wait…[/b]\n"
+                "⚡  [b]AI engine is still starting up…[/b]\n"
                 "[color=888888][size=12sp]"
-                "This takes 1-2 minutes on first launch while the AI warms up."
+                "You can watch the progress in the welcome panel above. "
+                "Please send your message once it's ready."
                 "[/size][/color]",
                 role="assistant",
             )

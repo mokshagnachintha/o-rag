@@ -88,12 +88,13 @@ def _start_auto_download() -> None:
         if not llm.is_loaded():
             load_model(
                 qwen_path,
+                on_progress=_progress,
                 on_done=lambda ok, msg: (
                     _auto_dl_done_cb(ok, msg) if _auto_dl_done_cb else None
                 ),
             )
         elif _auto_dl_done_cb:
-            _auto_dl_done_cb(True, f"Models ready: Qwen + Nomic")
+            _auto_dl_done_cb(True, "Models ready: Qwen + Nomic")
 
     auto_download_default(on_progress=_progress, on_done=_done)
 
@@ -133,12 +134,13 @@ def ingest_document(
 
 def load_model(
     model_path: str,
+    on_progress: Optional[Callable[[float, str], None]] = None,
     on_done: Optional[Callable[[bool, str], None]] = None,
 ) -> None:
-    """Load a GGUF model in a background thread."""
+    """Load a GGUF model in a background thread, with live progress callbacks."""
     def _run():
         try:
-            llm.load(model_path)
+            llm.load(model_path, on_progress=on_progress)
             if on_done:
                 on_done(True, f"Model loaded: {Path(model_path).name}")
         except Exception as e:
