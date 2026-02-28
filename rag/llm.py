@@ -316,7 +316,7 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int,
 
 
 def start_nomic_server(model_path: str,
-                       n_ctx: int = 256,
+                       n_ctx: int = 128,
                        n_threads: int = 0) -> bool:
     """
     Start a *second* llama-server process on _NOMIC_PORT (8083) loaded
@@ -532,7 +532,7 @@ class LlamaCppModel:
       3. llama-server      (auto-extracted from llamacpp_bin.zip)
     """
 
-    DEFAULT_CTX      = 2048
+    DEFAULT_CTX      = 1024
     DEFAULT_MAX_TOK  = 512
     DEFAULT_TEMP     = 0.7
     DEFAULT_TOP_P    = 0.9

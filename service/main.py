@@ -212,7 +212,7 @@ def main():
         if qwen_proc is None or qwen_proc.poll() is not None:
             if not _probe(QWEN_PORT):
                 print(f"[service] Starting Qwen server (port {QWEN_PORT})…")
-                qwen_proc = _launch(qwen_path, QWEN_PORT, n_ctx=2048)
+                qwen_proc = _launch(qwen_path, QWEN_PORT, n_ctx=1024)
                 if qwen_proc and _wait(QWEN_PORT, timeout=180):
                     print(f"[service] Qwen server ready on port {QWEN_PORT}.")
                 else:
@@ -226,7 +226,7 @@ def main():
         if nomic_proc is None or nomic_proc.poll() is not None:
             if not _probe(NOMIC_PORT):
                 print(f"[service] Starting Nomic server (port {NOMIC_PORT})…")
-                nomic_proc = _launch(nomic_path, NOMIC_PORT, n_ctx=256)
+                nomic_proc = _launch(nomic_path, NOMIC_PORT, n_ctx=128)
                 if nomic_proc and _wait(NOMIC_PORT, timeout=60):
                     print(f"[service] Nomic server ready on port {NOMIC_PORT}.")
                 else:
