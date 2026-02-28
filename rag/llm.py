@@ -207,6 +207,7 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
             "--threads",  str(n_threads),
             "--port",     str(_LLAMASERVER_PORT),
             "--host",     "127.0.0.1",
+            "--embedding",   # enable /embedding endpoint for semantic retrieval
         ]
         print(f"[llama-server] Starting: {cmd[0]}")
         print(f"  Model: {Path(model_path).name}")
@@ -259,6 +260,36 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
             pass
     print("[llama-server] Server ready.")
     return True
+
+
+def get_embedding(text: str) -> "list[float] | None":
+    """
+    Get a dense embedding vector for *text* via the running llama-server.
+    Requires the server to have been started with --embedding.
+    Returns None if the server is not running or the call fails.
+    """
+    if _LLAMASERVER_PROC is None:
+        return None
+    import urllib.request
+    import urllib.error
+    payload = json.dumps({"content": text}).encode()
+    url = f"http://127.0.0.1:{_LLAMASERVER_PORT}/embedding"
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+            # llama-server returns {"embedding": [float, ...]}
+            emb = data.get("embedding")
+            if isinstance(emb, list) and emb:
+                return emb
+            return None
+    except Exception as e:
+        print(f"[embedding] failed: {e}")
+        return None
 
 
 def _stop_llama_server() -> None:
