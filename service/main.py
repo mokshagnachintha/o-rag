@@ -194,7 +194,11 @@ def _wait_for_models(qwen_path: str, nomic_path: str, timeout: int = 600):
 
 def main():
     print("[service] O-RAG AI service starting.")
-    _set_foreground()
+    # NOTE: p4a automatically calls startForeground() when the service is
+    # declared with ':foreground' in buildozer.spec.  Calling _set_foreground()
+    # here would be a duplicate startForeground() call which crashes on
+    # Android 12-14 (ForegroundServiceStartNotAllowedException / invalid icon).
+    # _set_foreground()  <-- intentionally disabled
 
     models = _models_dir()
     qwen_path  = os.path.join(models, QWEN_FILE)

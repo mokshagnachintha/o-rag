@@ -50,7 +50,8 @@ android.permissions =
     READ_MEDIA_VIDEO,
     INTERNET,
     FOREGROUND_SERVICE,
-    FOREGROUND_SERVICE_SPECIAL_USE
+    FOREGROUND_SERVICE_SPECIAL_USE,
+    POST_NOTIFICATIONS
 
 # Background service — keeps llama-server alive between app sessions
 # Format: Name:path:foreground
