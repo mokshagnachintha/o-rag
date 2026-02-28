@@ -241,7 +241,7 @@ def ask(
                     on_done(False, "No LLM model loaded. Please load a GGUF model first.")
                 return
 
-            results = retriever.query(question, top_k=top_k)
+            results = retriever.query(question, top_k=2)
             if not results:
                 if on_done:
                     on_done(False, "No relevant context found.")

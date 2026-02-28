@@ -211,7 +211,7 @@ def main():
         if qwen_proc is None or qwen_proc.poll() is not None:
             if not _probe(QWEN_PORT):
                 print(f"[service] Starting Qwen server (port {QWEN_PORT})…")
-                qwen_proc = _launch(qwen_path, QWEN_PORT, n_ctx=512)
+                qwen_proc = _launch(qwen_path, QWEN_PORT, n_ctx=768)
                 if qwen_proc and _wait(QWEN_PORT, timeout=180):
                     print(f"[service] Qwen server ready on port {QWEN_PORT}.")
                 else:
