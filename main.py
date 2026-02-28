@@ -1,38 +1,59 @@
 """
-main.py — Kivy entry point for O-RAG Android app.
+main.py — Offline RAG App entry point (Kivy / Android).
 
-Bootstraps the Kivy App and hands off to the ChatScreen (ui/screens/chat_screen.py),
-which contains the full UI and the model-loading / RAG pipeline.
+Single-screen design: one chat interface.
+  • Tap + to attach a PDF or TXT document (RAG mode activates automatically)
+  • Otherwise chat freely with the AI
+  • Model is bundled in the APK — extracted to device storage on first launch
 """
+
+# ── Kivy config BEFORE any other kivy import ──────────────────────── #
 import os
-import sys
+os.environ.setdefault("KIVY_LOG_LEVEL", "warning")
 
-# Ensure the app root is on the Python path so that `rag.*` and `ui.*` imports work
-# both on Android (ANDROID_PRIVATE) and on desktop.
-_APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-if _APP_ROOT not in sys.path:
-    sys.path.insert(0, _APP_ROOT)
-
-# Kivy window setup — must happen before any other kivy import
 from kivy.config import Config
-Config.set("graphics", "resizable", "0")
+Config.set("kivy", "window_icon", "assets/icon.png")
+# ─────────────────────────────────────────────────────────────────── #
+
+# Keep input bar visible above the soft keyboard on Android
+from kivy.core.window import Window
+Window.softinput_mode = "below_target"
 
 from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager, NoTransition
+from kivy.uix.screenmanager import ScreenManager, FadeTransition
+from kivy.uix.boxlayout import BoxLayout
+from kivy.graphics import Color, Rectangle
+from kivy.clock import Clock
+
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
 
 from ui.screens.chat_screen import ChatScreen
+from rag.pipeline           import init
 
 
-class OragApp(App):
-    """Root Kivy application."""
+class RAGApp(App):
+    title = "O-RAG"
 
     def build(self):
-        self.title = "O-RAG"
-        sm = ScreenManager(transition=NoTransition())
+        root = BoxLayout(orientation="vertical")
+        with root.canvas.before:
+            Color(0.102, 0.102, 0.102, 1)   # #1a1a1a
+            bg = Rectangle()
+        root.bind(
+            pos =lambda w, _: setattr(bg, "pos",  w.pos),
+            size=lambda w, _: setattr(bg, "size", w.size),
+        )
+
+        sm = ScreenManager(transition=FadeTransition(duration=0.12))
         sm.add_widget(ChatScreen(name="chat"))
-        return sm
+        root.add_widget(sm)
+
+        # Init DB + retriever, then kick off model loading (bundled or download)
+        Clock.schedule_once(lambda *_: init(), 0)
+        return root
 
 
 if __name__ == "__main__":
-    OragApp().run()
+    RAGApp().run()
 
