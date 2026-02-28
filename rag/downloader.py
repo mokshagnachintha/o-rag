@@ -215,25 +215,16 @@ def download_model(
     threading.Thread(target=_run, daemon=True).start()
 
 
-def extract_from_apk_asset(
-    asset_name:  str = "models/model.gguf",
+def _extract_model_from_apk(
+    asset_name:  str,
+    dest_path:   str,
     on_progress: Optional[Callable[[float, str], None]] = None,
     on_done:     Optional[Callable[[bool, str], None]]  = None,
 ) -> None:
     """
-    Android-only: copy the GGUF model from the APK's assets/ directory to
-    writable private storage ($ANDROID_PRIVATE/models/).
-
-    The model is stored as a ZIP_STORED (uncompressed) entry in the APK, so
-    Android's AssetManager can open it via a file descriptor.  We copy it in
-    1 MB chunks and report progress so the UI can show a progress bar.
-
-    Falls back gracefully to on_done(False, ...) if:
-      • Not running on Android
-      • Asset not found in APK (will trigger HF download fallback)
+    Internal helper: extract any APK asset entry to an arbitrary dest_path.
+    Runs in a background thread.
     """
-    dest = model_dest_path(QWEN_MODEL["filename"])
-
     def _run():
         try:
             from android import mActivity  # type: ignore
@@ -246,23 +237,22 @@ def extract_from_apk_asset(
             import zipfile as _zf
 
             apk_path = str(mActivity.getPackageCodePath())
-            print(f"[downloader] APK path: {apk_path}")
+            entry  = f"assets/{asset_name}"
+            label  = os.path.basename(asset_name)
 
-            entry = f"assets/{asset_name}"
             with _zf.ZipFile(apk_path, "r") as zf:
                 info  = zf.getinfo(entry)
                 total = info.file_size
-                print(f"[downloader] Entry={entry} size={total//1_048_576} MB")
+                print(f"[downloader] Extracting {entry}  ({total//1_048_576} MB) → {dest_path}")
 
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 copied = 0
-
                 if on_progress:
-                    on_progress(0.0, "Extracting bundled model…")
+                    on_progress(0.0, f"Extracting {label}…")
 
-                with zf.open(info) as zin, open(dest, "wb") as f:
+                with zf.open(info) as zin, open(dest_path, "wb") as f:
                     while True:
-                        chunk = zin.read(1024 * 512)
+                        chunk = zin.read(512 * 1024)
                         if not chunk:
                             break
                         f.write(chunk)
@@ -271,19 +261,33 @@ def extract_from_apk_asset(
                             frac = min(copied / total, 0.99)
                             mb_d = copied // 1_048_576
                             mb_t = total  // 1_048_576
-                            on_progress(frac, f"Extracting model… {mb_d} / {mb_t} MB")
+                            on_progress(frac, f"Extracting {label}… {mb_d} / {mb_t} MB")
 
             if on_progress:
-                on_progress(1.0, "Extraction complete.")
+                on_progress(1.0, f"Extracted {label}.")
             if on_done:
-                on_done(True, dest)
+                on_done(True, dest_path)
 
         except Exception as e:
-            # Asset not present in APK → will fall back to HF download
             if on_done:
                 on_done(False, str(e))
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def extract_from_apk_asset(
+    asset_name:  str = "models/model.gguf",
+    on_progress: Optional[Callable[[float, str], None]] = None,
+    on_done:     Optional[Callable[[bool, str], None]]  = None,
+) -> None:
+    """Backward-compatible wrapper: extracts Qwen model from APK assets."""
+    _extract_model_from_apk(
+        asset_name  = asset_name,
+        dest_path   = model_dest_path(QWEN_MODEL["filename"]),
+        on_progress = on_progress,
+        on_done     = on_done,
+    )
+
 
 
 def auto_download_default(
@@ -308,7 +312,29 @@ def auto_download_default(
             if on_done: on_done(True, "All models ready.")
             return
 
-        # Nomic is small (~80MB), just download it directly from HF
+        # On Android, try extracting from APK first
+        if os.environ.get("ANDROID_PRIVATE"):
+            def _after_nomic_extract(ok, path_or_err):
+                if ok:
+                    if on_progress: on_progress(1.0, "All models ready.")
+                    if on_done: on_done(True, "All models ready.")
+                else:
+                    # Fallback: download from HuggingFace
+                    download_model(
+                        repo_id     = NOMIC_MODEL["repo_id"],
+                        filename    = NOMIC_MODEL["filename"],
+                        on_progress = on_progress,
+                        on_done     = on_done,
+                    )
+            _extract_model_from_apk(
+                asset_name   = "models/nomic.gguf",
+                dest_path    = nomic_dest,
+                on_progress  = on_progress,
+                on_done      = _after_nomic_extract,
+            )
+            return
+
+        # Desktop / no APK: download directly from HF
         download_model(
             repo_id     = NOMIC_MODEL["repo_id"],
             filename    = NOMIC_MODEL["filename"],

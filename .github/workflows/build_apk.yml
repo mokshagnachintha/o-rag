@@ -152,19 +152,30 @@ jobs:
           chmod 755 llama-server-arm64
           echo "SUCCESS: $(du -sh llama-server-arm64)"
 
-          # ── 9b. Download GGUF model ───────────────────────────────────
-          echo "=== Step 9b: Downloading Gemma GGUF model ==="
+          # ── 9b. Download GGUF models ──────────────────────────────────
+          echo "=== Step 9b: Downloading Qwen 2.5 1.5B Instruct Q4_K_M GGUF model ==="
           pip install huggingface-hub --quiet
           python3 - <<'PYEOF'
           import os
           from huggingface_hub import hf_hub_download
+
+          # Qwen generation model (~1.1 GB)
           path = hf_hub_download(
-              repo_id="mradermacher/Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF",
-              filename="Gemma-3-1B-it-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-Q4_K_M.gguf",
+              repo_id="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+              filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
               local_dir="model_tmp",
               local_dir_use_symlinks=False,
           )
-          print(f"Model: {path} ({os.path.getsize(path)//1_048_576} MB)")
+          print(f"Qwen model: {path} ({os.path.getsize(path)//1_048_576} MB)")
+
+          # Nomic embedding model (~80 MB)
+          nomic = hf_hub_download(
+              repo_id="nomic-ai/nomic-embed-text-v1.5-GGUF",
+              filename="nomic-embed-text-v1.5.Q4_K_M.gguf",
+              local_dir="model_tmp",
+              local_dir_use_symlinks=False,
+          )
+          print(f"Nomic model: {nomic} ({os.path.getsize(nomic)//1_048_576} MB)")
           PYEOF
 
           # ── 9c. Patch APK — inject model + binary in one pass ────────
@@ -190,7 +201,7 @@ jobs:
                       continue
                   dst.writestr(item, src.read(item.filename))
 
-              print("Adding model (ZIP_STORED, uncompressed)...")
+              print("Adding Qwen model (ZIP_STORED, uncompressed)...")
               mi = zipfile.ZipInfo("assets/models/model.gguf")
               mi.compress_type = zipfile.ZIP_STORED
               written = 0
@@ -200,6 +211,16 @@ jobs:
                       written += len(chunk)
                       if written % (100*1024*1024) == 0:
                           print(f"  {written//1_048_576} MB...", flush=True)
+
+              nomic_path = glob.glob("model_tmp/nomic*.gguf")[0]
+              print("Adding Nomic model (ZIP_STORED, uncompressed)...")
+              ni = zipfile.ZipInfo("assets/models/nomic.gguf")
+              ni.compress_type = zipfile.ZIP_STORED
+              written = 0
+              with open(nomic_path, "rb") as nf, dst.open(ni, "w") as zo:
+                  while chunk := nf.read(CHUNK):
+                      zo.write(chunk)
+                      written += len(chunk)
 
               # Bundle as a native library so Android extracts it at install
               # time to nativeLibraryDir — the ONLY location SELinux allows
@@ -219,7 +240,9 @@ jobs:
           # Verify both entries are present
           with zipfile.ZipFile(apk, 'r') as vf:
               names = vf.namelist()
-              for check in ["lib/arm64-v8a/libllama_server.so", "assets/models/model.gguf"]:
+              for check in ["lib/arm64-v8a/libllama_server.so",
+                             "assets/models/model.gguf",
+                             "assets/models/nomic.gguf"]:
                   found = check in names
                   sz = vf.getinfo(check).file_size // 1024 if found else 0
                   print(f"  {'OK' if found else 'MISSING'}: {check} ({sz} KB)")
