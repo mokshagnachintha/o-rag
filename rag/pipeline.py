@@ -14,7 +14,7 @@ from .chunker  import process_document
 from .db       import insert_chunks
 from .retriever import HybridRetriever
 from .llm      import llm, build_rag_prompt, build_direct_prompt, list_available_models
-from .downloader import auto_download_default, model_dest_path, DEFAULT_MODEL
+from .downloader import auto_download_default, model_dest_path
 
 
 # Module-level retriever (shared across the whole app)

@@ -20,7 +20,7 @@ from kivy.clock import mainthread
 from kivy.metrics import dp, sp
 from kivy.graphics import Color, RoundedRectangle
 
-from rag.downloader import GEMMA_MODELS, is_downloaded, download_model
+from rag.downloader import MOBILE_MODELS as GEMMA_MODELS, is_downloaded, download_model
 
 
 # ------------------------------------------------------------------ #
