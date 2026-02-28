@@ -347,6 +347,7 @@ class ChatScreen(Screen):
         self._current_row:    MessageRow | None       = None
         self._typing:         _TypingIndicator | None = None
         self._has_docs:       bool                    = False
+        self._rag_doc_name:   str                     = ""
         self._pending_attach: str | None              = None
         self._attach_card:    AttachmentPreviewCard | None = None
         self._scroll_pending: bool                   = False
@@ -755,10 +756,12 @@ class ChatScreen(Screen):
         card.set_done(ok, msg)
         if ok:
             self._has_docs = True
+            self._rag_doc_name = fname
             self._add_msg(
-                "✅  Document indexed! Ask me anything about it.\n"
+                f"📄  [b]RAG mode active[/b] — {fname}\n"
+                "I'll answer all your questions using this document.\n"
                 "[color=888888][size=12sp]"
-                "(Tap ＋ again to add more documents.)"
+                "Type [b]quit rag[/b] to return to normal chat."
                 "[/size][/color]",
                 role="assistant",
             )
@@ -794,6 +797,28 @@ class ChatScreen(Screen):
 
         # Nothing to do if both empty
         if not q and not path:
+            return
+
+        # "quit rag" command — exit RAG mode and reset docs
+        if q.lower() in ("quit rag", "exit rag", "/quit rag", "/exit rag"):
+            self._input.text = ""
+            self._add_msg(q, role="user")
+            if self._has_docs:
+                from rag.pipeline import clear_all_documents
+                clear_all_documents()
+                self._has_docs     = False
+                doc = self._rag_doc_name
+                self._rag_doc_name = ""
+                self._add_msg(
+                    f"💬  [b]RAG mode off[/b] — {doc} removed.\n"
+                    "Back to normal chat. Your conversation history is preserved.",
+                    role="assistant",
+                )
+            else:
+                self._add_msg(
+                    "ℹ️  Not in RAG mode. Upload a PDF or TXT to activate it.",
+                    role="assistant",
+                )
             return
 
         # Block sends until the LLM is ready

@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from .db       import init_db, insert_document, update_doc_chunk_count
+from .db       import init_db, insert_document, update_doc_chunk_count, get_conn
 from .chunker  import process_document
 from .db       import insert_chunks
 from .retriever import HybridRetriever
@@ -167,6 +167,13 @@ def load_model(
 
 def get_available_models() -> list[str]:
     return list_available_models()
+
+
+def clear_all_documents() -> None:
+    """Delete all ingested documents + chunks and reset the in-memory retriever."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM documents")
+    retriever.reload()
 
 
 def is_model_loaded() -> bool:
