@@ -170,7 +170,7 @@ def _launch(model_path: str, port: int,
 
 QWEN_PORT  = 8082
 NOMIC_PORT = 8083
-QWEN_FILE  = "qwen2.5-1.5b-instruct-q3_k_m.gguf"
+QWEN_FILE  = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
 NOMIC_FILE = "nomic-embed-text-v1.5.Q4_K_M.gguf"
 MIN_QWEN_BYTES  = 100 * 1024 * 1024   # 100 MB sanity check
 MIN_NOMIC_BYTES = 10  * 1024 * 1024   # 10 MB

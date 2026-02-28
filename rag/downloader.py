@@ -31,10 +31,10 @@ from typing import Callable, Optional
 
 # The primary Generation model
 QWEN_MODEL: dict = {
-    "label":    "Qwen 2.5 1.5B Instruct Q3_K_M (~780 MB)",
+    "label":    "Qwen 2.5 1.5B Instruct Q4_K_M (~1.1 GB)",
     "repo_id":  "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-    "filename": "qwen2.5-1.5b-instruct-q3_k_m.gguf",
-    "size_mb":  780,
+    "filename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "size_mb":  1120,
 }
 
 # The primary Embedding model
