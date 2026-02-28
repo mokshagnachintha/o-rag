@@ -43,10 +43,25 @@ def register_auto_download_callbacks(
     _auto_dl_progress_cb = on_progress
     _auto_dl_done_cb     = on_done
 
-    # Race-condition guard: if the background thread already finished
-    # loading before the UI registered its callback, fire it right now.
+    # Race guard 1: LLM already loaded in this process
     if on_done and llm.is_loaded():
         on_done(True, "Models ready: Qwen + Nomic")
+        return
+
+    # Race guard 2: foreground service already has llama-server running —
+    # skip extraction/download and connect immediately.
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:8082/health", timeout=1
+        ) as r:
+            if r.status == 200:
+                llm._backend = "llama_server"  # mark as connected
+                if on_done:
+                    on_done(True, "Models ready: Qwen + Nomic (service)")
+                return
+    except Exception:
+        pass
 
 
 def init() -> None:

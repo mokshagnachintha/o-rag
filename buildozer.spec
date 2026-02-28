@@ -48,7 +48,13 @@ android.permissions =
     MANAGE_EXTERNAL_STORAGE,
     READ_MEDIA_IMAGES,
     READ_MEDIA_VIDEO,
-    INTERNET
+    INTERNET,
+    FOREGROUND_SERVICE,
+    FOREGROUND_SERVICE_SPECIAL_USE
+
+# Background service — keeps llama-server alive between app sessions
+# Format: Name:path:foreground
+android.services = LlamaService:service/main.py:foreground
 
 android.api         = 34
 android.minapi      = 26

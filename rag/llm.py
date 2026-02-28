@@ -220,6 +220,18 @@ def _wait_for_server(port: int, timeout: int = 120,
     return False
 
 
+def _probe_port(port: int) -> bool:
+    """Return True if a llama-server is already responding on *port*."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=1
+        ) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def _start_llama_server(model_path: str, n_ctx: int, n_threads: int,
                         on_progress: Optional[Callable[[float, str], None]] = None) -> bool:
     global _LLAMASERVER_PROC, _ANDROID_BINARY_ERROR
@@ -228,6 +240,13 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int,
         return False
     with _LLAMASERVER_LOCK:
         if _LLAMASERVER_PROC is not None:
+            return True
+        # Fast-path: the Android foreground service may have already started
+        # llama-server.  If the port is responding we don't need a new process.
+        if _probe_port(_LLAMASERVER_PORT):
+            print("[llama-server] Already running (owned by service) — skipping launch.")
+            if on_progress:
+                on_progress(1.0, "AI engine ready!")
             return True
         cmd = [
             str(exe),
