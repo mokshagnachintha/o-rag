@@ -478,8 +478,9 @@ class ChatScreen(Screen):
 
         self.add_widget(root)
 
-        # Register model-ready callbacks once pipeline is up
-        Clock.schedule_once(self._register_pipeline_callbacks, 0.8)
+        # Register model-ready callbacks immediately (before init() fires)
+        # so we never miss the done event due to a timing race.
+        Clock.schedule_once(self._register_pipeline_callbacks, 0)
 
     # ---------------------------------------------------------------- #
     #  Model progress / ready callbacks                                 #

@@ -50,7 +50,9 @@ class RAGApp(App):
         root.add_widget(sm)
 
         # Init DB + retriever, then kick off model loading (bundled or download)
-        Clock.schedule_once(lambda *_: init(), 0)
+        # Delay by 0.3 s so the ChatScreen's pipeline callbacks are registered
+        # first — prevents a race where models load before the UI can hear about it.
+        Clock.schedule_once(lambda *_: init(), 0.3)
         return root
 
 

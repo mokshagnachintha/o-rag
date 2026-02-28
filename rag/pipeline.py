@@ -34,10 +34,19 @@ def register_auto_download_callbacks(
     on_progress: Optional[Callable[[float, str], None]],
     on_done:     Optional[Callable[[bool, str], None]],
 ) -> None:
-    """Call from UI to receive auto-download progress events."""
+    """
+    Call from UI to receive auto-download / model-load progress events.
+    If the model is already loaded by the time this is called, on_done
+    fires immediately so the UI never gets stuck in the loading state.
+    """
     global _auto_dl_progress_cb, _auto_dl_done_cb
     _auto_dl_progress_cb = on_progress
     _auto_dl_done_cb     = on_done
+
+    # Race-condition guard: if the background thread already finished
+    # loading before the UI registered its callback, fire it right now.
+    if on_done and llm.is_loaded():
+        on_done(True, "Models ready: Qwen + Nomic")
 
 
 def init() -> None:
