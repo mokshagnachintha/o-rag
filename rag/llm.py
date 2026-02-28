@@ -62,11 +62,15 @@ def _ollama_reachable() -> bool:
 #  llama-server subprocess backend                                     #
 # ------------------------------------------------------------------ #
 
-_LLAMASERVER_PORT  = 8082
+_LLAMASERVER_PORT  = 8082   # Qwen generation server
 _LLAMASERVER_PROC  = None
 _LLAMASERVER_LOCK  = threading.Lock()
 _ANDROID_EXE_PATH: Optional[str] = None   # set once by _ensure_android_binary
 _ANDROID_BINARY_ERROR: str = ""            # stores last extraction failure reason
+
+_NOMIC_PORT  = 8083         # Nomic embedding server
+_NOMIC_PROC  = None
+_NOMIC_LOCK  = threading.Lock()
 
 
 def _bin_dir() -> Path:
@@ -262,18 +266,99 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int) -> bool:
     return True
 
 
+def start_nomic_server(model_path: str,
+                       n_ctx: int = 512,
+                       n_threads: int = 4) -> bool:
+    """
+    Start a *second* llama-server process on _NOMIC_PORT (8083) loaded
+    with the Nomic embedding model.  No-op if already running.
+    Returns True when the server is ready.
+    """
+    global _NOMIC_PROC
+    exe = _server_exe()
+    if exe is None:
+        print("[nomic-server] no llama-server binary available")
+        return False
+    with _NOMIC_LOCK:
+        if _NOMIC_PROC is not None and _NOMIC_PROC.poll() is None:
+            return True   # already running
+        cmd = [
+            str(exe),
+            "--model",    model_path,
+            "--ctx-size", str(n_ctx),
+            "--threads",  str(n_threads),
+            "--port",     str(_NOMIC_PORT),
+            "--host",     "127.0.0.1",
+            "--embedding",
+        ]
+        print(f"[nomic-server] Starting on port {_NOMIC_PORT}")
+        print(f"  Model: {Path(model_path).name}")
+        cf = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        log_file = None
+        priv = os.environ.get("ANDROID_PRIVATE", "")
+        if priv:
+            try:
+                log_file = open(os.path.join(priv, "nomic_server.log"), "wb")
+            except Exception:
+                pass
+        try:
+            _NOMIC_PROC = subprocess.Popen(
+                cmd,
+                stdout=log_file if log_file else subprocess.DEVNULL,
+                stderr=log_file if log_file else subprocess.DEVNULL,
+                creationflags=cf,
+            )
+        except Exception as exc:
+            if log_file:
+                log_file.close()
+            print(f"[nomic-server] Launch failed: {exc}")
+            return False
+    ready = _wait_for_server(_NOMIC_PORT, timeout=120)
+    if log_file:
+        try:
+            log_file.close()
+        except Exception:
+            pass
+    if ready:
+        print("[nomic-server] Ready.")
+    else:
+        print("[nomic-server] Timed out / crashed.")
+    return ready
+
+
+def stop_nomic_server() -> None:
+    global _NOMIC_PROC
+    with _NOMIC_LOCK:
+        if _NOMIC_PROC is not None:
+            try:
+                _NOMIC_PROC.terminate()
+                _NOMIC_PROC.wait(timeout=5)
+            except Exception:
+                try:
+                    _NOMIC_PROC.kill()
+                except Exception:
+                    pass
+            _NOMIC_PROC = None
+
+
 def get_embedding(text: str) -> "list[float] | None":
     """
-    Get a dense embedding vector for *text* via the running llama-server.
-    Requires the server to have been started with --embedding.
-    Returns None if the server is not running or the call fails.
+    Get a dense embedding vector for *text* via the Nomic llama-server
+    running on port 8083.  Falls back to the generation server (port 8082)
+    if the Nomic server is not running.
+    Returns None if neither server is available.
     """
-    if _LLAMASERVER_PROC is None:
+    # Prefer dedicated Nomic server; fall back to generation server
+    if _NOMIC_PROC is not None and _NOMIC_PROC.poll() is None:
+        port = _NOMIC_PORT
+    elif _LLAMASERVER_PROC is not None:
+        port = _LLAMASERVER_PORT
+    else:
         return None
     import urllib.request
     import urllib.error
     payload = json.dumps({"content": text}).encode()
-    url = f"http://127.0.0.1:{_LLAMASERVER_PORT}/embedding"
+    url = f"http://127.0.0.1:{port}/embedding"
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"},

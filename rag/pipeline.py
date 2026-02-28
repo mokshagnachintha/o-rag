@@ -14,7 +14,7 @@ from .chunker  import process_document
 from .db       import insert_chunks
 from .retriever import HybridRetriever
 from .llm      import llm, build_rag_prompt, build_direct_prompt, list_available_models
-from .downloader import auto_download_default, model_dest_path
+from .downloader import auto_download_default, model_dest_path, QWEN_MODEL, NOMIC_MODEL
 
 
 # Module-level retriever (shared across the whole app)
@@ -48,26 +48,43 @@ def init() -> None:
 
 
 def _start_auto_download() -> None:
-    """Download Gemma 3 4B Q4 in the background; auto-load when done."""
+    """Ensure Qwen + Nomic are on disk, then load Qwen and start Nomic server."""
     def _progress(frac: float, text: str):
         if _auto_dl_progress_cb:
             _auto_dl_progress_cb(frac, text)
 
-    def _done(success: bool, path: str):
-        if success:
-            # Auto-load the model right after download finishes
-            if not llm.is_loaded():
-                load_model(
-                    path,
-                    on_done=lambda ok, msg: (
-                        _auto_dl_done_cb(ok, msg) if _auto_dl_done_cb else None
-                    ),
-                )
-            elif _auto_dl_done_cb:
-                _auto_dl_done_cb(True, f"Model ready: {Path(path).name}")
-        else:
+    def _done(success: bool, _msg: str):
+        """Called when BOTH models are ready on disk."""
+        qwen_path  = model_dest_path(QWEN_MODEL["filename"])
+        nomic_path = model_dest_path(NOMIC_MODEL["filename"])
+
+        if not success:
             if _auto_dl_done_cb:
-                _auto_dl_done_cb(False, path)  # path contains error msg here
+                _auto_dl_done_cb(False, _msg)
+            return
+
+        # ── 1. Start the Nomic embedding server (port 8083) ─────────── #
+        # Done first while RAM is still clean; it only needs 512 context
+        # and ~200 MB RAM for the 80 MB Q4 model.
+        from .llm import start_nomic_server
+        import os
+        if os.path.isfile(nomic_path):
+            threading.Thread(
+                target=start_nomic_server,
+                args=(nomic_path,),
+                daemon=True,
+            ).start()
+
+        # ── 2. Load Qwen for generation (always use Qwen, not Nomic) ── #
+        if not llm.is_loaded():
+            load_model(
+                qwen_path,
+                on_done=lambda ok, msg: (
+                    _auto_dl_done_cb(ok, msg) if _auto_dl_done_cb else None
+                ),
+            )
+        elif _auto_dl_done_cb:
+            _auto_dl_done_cb(True, f"Models ready: Qwen + Nomic")
 
     auto_download_default(on_progress=_progress, on_done=_done)
 
