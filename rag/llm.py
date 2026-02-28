@@ -63,6 +63,19 @@ def _ollama_reachable() -> bool:
 # ------------------------------------------------------------------ #
 
 _LLAMASERVER_PORT  = 8082   # Qwen generation server
+
+
+def _optimal_threads() -> int:
+    """Pick a sensible thread count for the device.
+    Use half the logical CPUs (targets performance cores on big.LITTLE),
+    clamped to [2, 8].  Falls back to 4 if cpu_count is unavailable.
+    """
+    try:
+        import os as _os
+        count = _os.cpu_count() or 4
+        return max(2, min(8, count // 2))
+    except Exception:
+        return 4
 _LLAMASERVER_PROC  = None
 _LLAMASERVER_LOCK  = threading.Lock()
 _ANDROID_EXE_PATH: Optional[str] = None   # set once by _ensure_android_binary
@@ -177,6 +190,7 @@ def _extract_zip_if_needed() -> bool:
     return _server_exe() is not None
 
 
+
 def _wait_for_server(port: int, timeout: int = 120,
                      on_tick: Optional[Callable[[float, str], None]] = None) -> bool:
     import urllib.request
@@ -217,12 +231,17 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int,
             return True
         cmd = [
             str(exe),
-            "--model",    model_path,
-            "--ctx-size", str(n_ctx),
-            "--threads",  str(n_threads),
-            "--port",     str(_LLAMASERVER_PORT),
-            "--host",     "127.0.0.1",
+            "--model",         model_path,
+            "--ctx-size",      str(n_ctx),
+            "--threads",       str(n_threads),
+            "--threads-batch", str(n_threads),
+            "--port",          str(_LLAMASERVER_PORT),
+            "--host",          "127.0.0.1",
             "--embedding",
+            "--flash-attn",
+            "--cache-type-k",  "q8_0",
+            "--cache-type-v",  "q8_0",
+            "--cont-batching",
         ]
         print(f"[llama-server] Starting: {cmd[0]}")
         print(f"  Model: {Path(model_path).name}")
@@ -278,13 +297,15 @@ def _start_llama_server(model_path: str, n_ctx: int, n_threads: int,
 
 
 def start_nomic_server(model_path: str,
-                       n_ctx: int = 512,
-                       n_threads: int = 4) -> bool:
+                       n_ctx: int = 256,
+                       n_threads: int = 0) -> bool:
     """
     Start a *second* llama-server process on _NOMIC_PORT (8083) loaded
     with the Nomic embedding model.  No-op if already running.
     Returns True when the server is ready.
     """
+    if n_threads == 0:
+        n_threads = _optimal_threads()
     global _NOMIC_PROC
     exe = _server_exe()
     if exe is None:
@@ -295,12 +316,16 @@ def start_nomic_server(model_path: str,
             return True   # already running
         cmd = [
             str(exe),
-            "--model",    model_path,
-            "--ctx-size", str(n_ctx),
-            "--threads",  str(n_threads),
-            "--port",     str(_NOMIC_PORT),
-            "--host",     "127.0.0.1",
+            "--model",         model_path,
+            "--ctx-size",      str(n_ctx),
+            "--threads",       str(n_threads),
+            "--threads-batch", str(n_threads),
+            "--port",          str(_NOMIC_PORT),
+            "--host",          "127.0.0.1",
             "--embedding",
+            "--flash-attn",
+            "--cache-type-k",  "q8_0",
+            "--cache-type-v",  "q8_0",
         ]
         print(f"[nomic-server] Starting on port {_NOMIC_PORT}")
         print(f"  Model: {Path(model_path).name}")
@@ -488,11 +513,11 @@ class LlamaCppModel:
       3. llama-server      (auto-extracted from llamacpp_bin.zip)
     """
 
-    DEFAULT_CTX      = 4096
-    DEFAULT_MAX_TOK  = 768
+    DEFAULT_CTX      = 2048
+    DEFAULT_MAX_TOK  = 512
     DEFAULT_TEMP     = 0.7
     DEFAULT_TOP_P    = 0.9
-    DEFAULT_THREADS  = 4
+    DEFAULT_THREADS  = 0   # 0 = auto-detect via _optimal_threads()
 
     def __init__(self) -> None:
         self._model      = None
@@ -508,6 +533,8 @@ class LlamaCppModel:
     def load(self, model_path: str, n_ctx: int = DEFAULT_CTX,
              n_threads: int = DEFAULT_THREADS, n_gpu_layers: int = 0,
              on_progress: Optional[Callable[[float, str], None]] = None) -> None:
+        if n_threads == 0:
+            n_threads = _optimal_threads()
         with self._lock:
             self._unload_internal()
 
