@@ -343,6 +343,7 @@ class ChatScreen(Screen):
     def __init__(self, **kw):
         super().__init__(**kw)
         self._history:        list                    = []
+        self._history_summary: str                    = ""  # compressed older turns
         self._pending_q:      str                     = ""
         self._current_row:    MessageRow | None       = None
         self._typing:         _TypingIndicator | None = None
@@ -864,6 +865,7 @@ class ChatScreen(Screen):
             chat_direct(
                 q,
                 history  =list(self._history),
+                summary  =self._history_summary,
                 stream_cb=self._on_token,
                 on_done  =self._on_done,
             )
@@ -891,8 +893,16 @@ class ChatScreen(Screen):
                 raw_ans = re.sub(r'\[/?[a-zA-Z][^\]]*\]', '',
                                  self._current_row._lbl.text).strip()
                 self._history.append((self._pending_q, raw_ans))
-                if len(self._history) > 10:
-                    self._history = self._history[-10:]
+                # Keep last 3 turns verbatim; compress older ones into a
+                # one-line summary (no LLM call — just first sentence of reply).
+                if len(self._history) > 6:
+                    old = self._history[:-3]          # turns to compress
+                    keep = self._history[-3:]         # most recent 3 verbatim
+                    for _q, _a in old:
+                        first_sent = _a.split(".")[0].strip()[:120]
+                        if first_sent:
+                            self._history_summary += f"- {_q}: {first_sent}.\n"
+                    self._history = keep
         else:
             if self._current_row:
                 self._current_row._lbl.text = (

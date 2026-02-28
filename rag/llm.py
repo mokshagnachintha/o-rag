@@ -835,10 +835,12 @@ def build_rag_prompt(context_chunks: list[str], question: str) -> str:
 def build_direct_prompt(
     question: str,
     history: list[tuple[str, str]] | None = None,
+    summary: str = "",
 ) -> str:
     """
     Build a plain conversational prompt using Qwen 2.5's ChatML format.
-    history: list of (user_text, assistant_text) pairs from previous turns.
+    summary : compressed plain-text of older turns (no LLM call, first sentences).
+    history : last 3 verbatim (user, assistant) pairs.
     """
     system_msg = (
         "You are a knowledgeable, helpful AI assistant. "
@@ -847,10 +849,17 @@ def build_direct_prompt(
         "Do NOT just repeat the question or echo back one word. "
         "Reply with only your final answer — no reasoning steps."
     )
+    # Append compressed older context to system message so it takes fewer
+    # tokens than full ChatML turns but still informs the model.
+    if summary.strip():
+        system_msg += (
+            "\n\nEarlier in this conversation (summary):\n"
+            + summary.strip()
+        )
     parts: list[str] = [f"<|im_start|>system\n{system_msg}<|im_end|>\n"]
 
-    # Include up to the last 6 turns of history
-    for user_msg, asst_msg in (history or [])[-6:]:
+    # Last 3 verbatim turns
+    for user_msg, asst_msg in (history or [])[-3:]:
         parts.append(
             f"<|im_start|>user\n{user_msg}<|im_end|>\n"
             f"<|im_start|>assistant\n{asst_msg}<|im_end|>\n"

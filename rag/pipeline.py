@@ -187,12 +187,14 @@ def is_model_loaded() -> bool:
 def chat_direct(
     question: str,
     history: list | None = None,
+    summary: str = "",
     stream_cb: Optional[Callable[[str], None]] = None,
     on_done: Optional[Callable[[bool, str], None]] = None,
 ) -> None:
     """
     Chat directly with the LLM — no document retrieval.
-    history: list of (user_text, assistant_text) tuples for multi-turn context.
+    history: last 3 verbatim (user, assistant) turns.
+    summary: compressed plain-text summary of older turns.
     """
     def _run():
         try:
@@ -201,7 +203,7 @@ def chat_direct(
                     on_done(False, "No LLM model loaded. Please load a GGUF model first.")
                 return
 
-            prompt = build_direct_prompt(question, history)
+            prompt = build_direct_prompt(question, history, summary)
             answer = llm.generate(prompt, stream_cb=stream_cb)
             answer = answer.strip()
             if on_done:
