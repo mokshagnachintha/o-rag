@@ -866,7 +866,7 @@ class ChatScreen(Screen):
 
         if self._has_docs:
             from rag.pipeline import ask
-            ask(q, top_k=4, stream_cb=self._on_token, on_done=self._on_done)
+            ask(q, stream_cb=self._on_token, on_done=self._on_done)
         else:
             from rag.pipeline import chat_direct
             chat_direct(

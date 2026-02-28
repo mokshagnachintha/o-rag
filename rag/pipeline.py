@@ -218,18 +218,14 @@ def chat_direct(
 
 def ask(
     question: str,
-    top_k: int = 4,
     stream_cb: Optional[Callable[[str], None]] = None,
     on_done: Optional[Callable[[bool, str], None]] = None,
 ) -> None:
     """
     Run a RAG query in a background thread.
-
-    Args:
-        question : user question
-        top_k    : number of chunks to retrieve
-        stream_cb: called with each new LLM token (for streaming UI)
-        on_done  : called with (success, full_answer_or_error)
+    Retrieves top-2 chunks (sized to fit ctx=768 budget).
+    stream_cb: called with each new LLM token (for streaming UI)
+    on_done  : called with (success, full_answer_or_error)
     """
     def _run():
         try:
