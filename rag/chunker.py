@@ -28,8 +28,8 @@ except ImportError:
 #  Constants                                                           #
 # ------------------------------------------------------------------ #
 
-CHUNK_SIZE   = 350   # tokens (approx words) per chunk
-CHUNK_OVERLAP = 60   # overlapping tokens between consecutive chunks
+CHUNK_SIZE   = 80    # tokens (approx words) per chunk — must fit in Nomic ctx=128
+CHUNK_OVERLAP = 15   # overlapping tokens between consecutive chunks
 
 # Minimal English stopwords (keeps index small)
 _STOP = frozenset(
@@ -114,12 +114,15 @@ def resolve_uri(path: str) -> str:
             raise RuntimeError(f"openFileDescriptor returned None for URI: {path}")
         try:
             fd_dup = os.dup(pfd.getFd())     # duplicate — Python owns this fd
-            with os.fdopen(fd_dup, "rb") as src_f:
-                data = src_f.read()
+            # Stream in 1 MB chunks to avoid OOM on large PDFs
+            with os.fdopen(fd_dup, "rb") as src_f, open(dest, "wb") as out_f:
+                while True:
+                    chunk = src_f.read(1 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    out_f.write(chunk)
         finally:
             pfd.close()                      # safe: pfd still owns the original fd
-        with open(dest, "wb") as out_f:
-            out_f.write(data)
         return dest
     except Exception as e:
         import traceback

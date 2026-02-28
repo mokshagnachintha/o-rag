@@ -344,6 +344,8 @@ class ChatScreen(Screen):
         super().__init__(**kw)
         self._history:        list                    = []
         self._history_summary: str                    = ""  # compressed older turns
+        self._token_buf:      list                    = []  # token batch buffer
+        self._token_flush_ev  = None                        # pending Clock event
         self._pending_q:      str                     = ""
         self._current_row:    MessageRow | None       = None
         self._typing:         _TypingIndicator | None = None
@@ -855,6 +857,11 @@ class ChatScreen(Screen):
 
         self._pending_q = q
         self._add_msg(q, role="user")
+        # Reset token buffer for new response
+        self._token_buf.clear()
+        if self._token_flush_ev is not None:
+            Clock.unschedule(self._token_flush_ev)
+            self._token_flush_ev = None
         self._show_typing()
 
         if self._has_docs:
@@ -870,20 +877,45 @@ class ChatScreen(Screen):
                 on_done  =self._on_done,
             )
 
-    @mainthread
     def _on_token(self, token: str):
+        """Called from background thread for every streamed token.
+        Buffers tokens and flushes to UI every 80 ms to reduce
+        mainthread event overhead (~200 tokens → ~10 flushes).
+        """
+        self._token_buf.append(token)
+        if self._token_flush_ev is None:
+            self._token_flush_ev = Clock.schedule_once(self._flush_tokens, 0.08)
+
+    @mainthread
+    def _flush_tokens(self, *_):
+        self._token_flush_ev = None
+        if not self._token_buf:
+            return
+        batch = "".join(self._token_buf)
+        self._token_buf.clear()
         if self._typing:
             self._hide_typing()
             self._current_row = self._add_msg("", role="assistant")
         if self._current_row:
-            self._current_row.append(token)
-            # Debounce: scroll at most once every 120 ms to stay smooth
+            self._current_row.append(batch)
             if not self._scroll_pending:
                 self._scroll_pending = True
                 Clock.schedule_once(self._do_scroll, 0.12)
 
     @mainthread
     def _on_done(self, success: bool, message: str):
+        # Flush any remaining buffered tokens first
+        if self._token_buf:
+            batch = "".join(self._token_buf)
+            self._token_buf.clear()
+            if self._token_flush_ev is not None:
+                Clock.unschedule(self._token_flush_ev)
+                self._token_flush_ev = None
+            if self._typing:
+                self._hide_typing()
+                self._current_row = self._add_msg("", role="assistant")
+            if self._current_row:
+                self._current_row.append(batch)
         self._hide_typing()
         if success:
             if not self._has_docs and self._pending_q and self._current_row:

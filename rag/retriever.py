@@ -108,17 +108,21 @@ class HybridRetriever:
     def _compute_embeddings(self) -> None:
         """
         Background thread: call llama-server /embedding for every chunk
-        and cache the result.  Gracefully no-ops if the server is down
-        or embeddings are unsupported.
+        and cache the result.  Capped at 30 chunks to avoid 100s of serial
+        HTTP roundtrips on large documents (BM25+TF-IDF handles the rest).
+        Gracefully no-ops if the server is down or embeddings are unsupported.
         """
         try:
             from .llm import get_embedding
             computed = {}
-            for c in self._chunks:
+            # Cap at 30 chunks — embed only the first 30 for speed.
+            # For RAG we retrieve top-2; 30 embedded chunks is more than enough.
+            chunks_to_embed = self._chunks[:30]
+            for c in chunks_to_embed:
                 cid  = c["id"]
-                text = c["text"]
-                # Keep each request short to stay within context window
-                emb = get_embedding(text[:1024])
+                # Cap at 300 chars ≈ 100 tokens, matching Nomic ctx=128
+                text = c["text"][:300]
+                emb = get_embedding(text)
                 if emb is None:
                     print("[retriever] embedding endpoint unavailable — "
                           "falling back to BM25+TF-IDF only")
@@ -188,7 +192,7 @@ class HybridRetriever:
 
         try:
             from .llm import get_embedding
-            q_emb = get_embedding(query_text[:512])
+            q_emb = get_embedding(query_text[:300])
             if q_emb is None:
                 return None
             scores = []
