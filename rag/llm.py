@@ -422,8 +422,15 @@ def get_embedding(text: str) -> "list[float] | None":
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
-            # llama-server returns {"embedding": [float, ...]}
-            emb = data.get("embedding")
+            # Newer llama-server: [{"index": 0, "embedding": [[float, ...]]}]
+            # Older llama-server: {"embedding": [float, ...]}
+            if isinstance(data, list):
+                emb = data[0].get("embedding") if data else None
+            else:
+                emb = data.get("embedding")
+            # Unwrap double-nested [[floats]] → [floats]
+            if isinstance(emb, list) and emb and isinstance(emb[0], list):
+                emb = emb[0]
             if isinstance(emb, list) and emb:
                 return emb
             return None
